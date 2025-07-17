@@ -1,0 +1,92 @@
+{
+  "description": "狼人杀游戏配置文件模板，请根据实际情况修改",
+  "players": [
+    {
+      "id": 1,
+      "name": "狼人1",
+      "role": "werewolf",
+      "api_url": "https://api.openai.com/v1/chat/completions",
+      "api_key": "sk-your-openai-key-1",
+      "model": "gpt-3.5-turbo"
+    },
+    {
+      "id": 2,
+      "name": "狼人2",
+      "role": "werewolf",
+      "api_url": "https://api.openai.com/v1/chat/completions",
+      "api_key": "sk-your-openai-key-2",
+      "model": "gpt-3.5-turbo"
+    },
+    {
+      "id": 3,
+      "name": "狼人3",
+      "role": "werewolf",
+      "api_url": "https://api.openai.com/v1/chat/completions",
+      "api_key": "sk-your-openai-key-3",
+      "model": "gpt-3.5-turbo"
+    },
+    {
+      "id": 4,
+      "name": "预言家",
+      "role": "seer",
+      "api_url": "https://api.openai.com/v1/chat/completions",
+      "api_key": "sk-your-openai-key-4",
+      "model": "gpt-3.5-turbo"
+    },
+    {
+      "id": 5,
+      "name": "女巫",
+      "role": "witch",
+      "api_url": "https://api.openai.com/v1/chat/completions",
+      "api_key": "sk-your-openai-key-5",
+      "model": "gpt-3.5-turbo"
+    },
+    {
+      "id": 6,
+      "name": "猎人",
+      "role": "hunter",
+      "api_url": "https://api.openai.com/v1/chat/completions",
+      "api_key": "sk-your-openai-key-6",
+      "model": "gpt-3.5-turbo"
+    },
+    {
+      "id": 7,
+      "name": "村民1",
+      "role": "villager",
+      "api_url": "https://api.openai.com/v1/chat/completions",
+      "api_key": "sk-your-openai-key-7",
+      "model": "gpt-3.5-turbo"
+    },
+    {
+      "id": 8,
+      "name": "村民2",
+      "role": "villager",
+      "api_url": "https://api.openai.com/v1/chat/completions",
+      "api_key": "sk-your-openai-key-8",
+      "model": "gpt-3.5-turbo"
+    },
+    {
+      "id": 9,
+      "name": "村民3",
+      "role": "villager",
+      "api_url": "https://api.openai.com/v1/chat/completions",
+      "api_key": "sk-your-openai-key-9",
+      "model": "gpt-3.5-turbo"
+    },
+    {
+      "id": 10,
+      "name": "村民4",
+      "role": "villager",
+      "api_url": "https://api.openai.com/v1/chat/completions",
+      "api_key": "sk-your-openai-key-10",
+      "model": "gpt-3.5-turbo"
+    }
+  ],
+  "notes": [
+    "角色必须包含：3个werewolf，1个seer，1个witch，1个hunter，4个villager",
+    "api_url应该指向你的LLM API端点，例如：OpenAI的https://api.openai.com",
+    "api_key是你在相应API提供商处获取的密钥",
+    "model指定使用的LLM模型名称",
+    "name可以是任意玩家名称，id必须是1-10的唯一编号"
+  ]
+}
