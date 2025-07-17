@@ -122,12 +122,10 @@ python test_setup.py
 
 ```
 ├── main.py                   # 主程序入口
-├── reshuffle_config.py       # 对配置文件重新随机分配编号和角色
-├── game_config.json          # 游戏配置文件
 ├── requirements.txt          # 依赖列表
-├── USAGE.md                  # 详细使用指南
 ├── config/
 │   ├── game_config_template.json
+│   ├── reshuffle_config.py   # 对配置文件重新随机分配编号和角色
 │   └── validate_config.py    # 配置验证工具
 ├── logs/                     # 游戏日志（自动生成）
 └── src/
