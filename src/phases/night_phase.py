@@ -369,11 +369,19 @@ class NightPhase:
         """Process all night actions and determine who dies"""
         deaths = []
         
+        # Debug: Print current state
+        # print(f"🔍 DEBUG: wolf_kill_target = {self.game_state.wolf_kill_target}")
+        # print(f"🔍 DEBUG: witch_heal_used = {self.game_state.witch_heal_used}")
+        
         # Wolf kill (unless healed)
         if self.game_state.wolf_kill_target and not self.game_state.witch_heal_used:
             target_player = self.game_state.get_player_by_id(self.game_state.wolf_kill_target)
             if target_player and target_player.is_alive():
                 deaths.append(self.game_state.wolf_kill_target)
+                # print(f"🔍 DEBUG: Adding wolf kill target {self.game_state.wolf_kill_target} to deaths")
+        elif self.game_state.wolf_kill_target and self.game_state.witch_heal_used:
+            pass
+            # print(f"🔍 DEBUG: Wolf kill target {self.game_state.wolf_kill_target} was healed by witch")
         
         # Witch poison
         # Need to check if witch used poison
@@ -383,6 +391,7 @@ class NightPhase:
                 target_player = self.game_state.get_player_by_id(target)
                 if target_player and target_player.is_alive():
                     deaths.append(target)
+                    print(f"🔍 DEBUG: Adding witch poison target {target} to deaths")
         
         # Remove duplicates and sort
         deaths = list(set(deaths))

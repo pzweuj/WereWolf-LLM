@@ -30,14 +30,15 @@ class LLMPlayer(Player):
                     {"role": "user", "content": full_prompt}
                 ],
                 "temperature": 0.7,
-                "max_tokens": 200
+                "max_tokens": 8192,
+                "max_length": 4000
             }
             
             response = requests.post(
                 f"{self.api_url}",
                 headers=headers,
                 json=payload,
-                timeout=30
+                timeout=180
             )
             
             if response.status_code == 200:
