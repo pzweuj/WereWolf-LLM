@@ -21,6 +21,9 @@ class DayPhase:
         # 2. Handle last words (if applicable)
         last_words = self._handle_last_words(night_deaths)
         
+        # Store last words in game state for context access
+        self.game_state.last_words_context = last_words
+        
         # 3. Day discussion
         discussion = self._day_discussion(night_deaths)
         

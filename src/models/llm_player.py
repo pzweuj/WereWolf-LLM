@@ -280,18 +280,18 @@ REASON: 根据玩家1和玩家2的发言，玩家3的逻辑存在矛盾，倾向
     
     def _werewolf_action(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """Wolf team coordination - unified decision making"""
-        print(f"🔍 DEBUG: _werewolf_action called")
-        print(f"🔍 DEBUG: context keys: {list(context.keys())}")
+        # print(f"🔍 DEBUG: _werewolf_action called")
+        # print(f"🔍 DEBUG: context keys: {list(context.keys())}")
         
         alive_players = context.get("alive_players", [])
         wolf_team = context.get("wolf_team", [])
         
-        print(f"🔍 DEBUG: alive_players: {alive_players}, type: {type(alive_players)}")
-        print(f"🔍 DEBUG: wolf_team: {wolf_team}, type: {type(wolf_team)}")
+        # print(f"🔍 DEBUG: alive_players: {alive_players}, type: {type(alive_players)}")
+        # print(f"🔍 DEBUG: wolf_team: {wolf_team}, type: {type(wolf_team)}")
         
         # Extract wolf IDs from the new format
         wolf_ids = [w.get("id") if isinstance(w, dict) else w for w in wolf_team]
-        print(f"🔍 DEBUG: extracted wolf_ids: {wolf_ids}")
+        # print(f"🔍 DEBUG: extracted wolf_ids: {wolf_ids}")
         
         # Extract non-wolf player IDs (integers only)
         try:
@@ -301,7 +301,7 @@ REASON: 根据玩家1和玩家2的发言，玩家3的逻辑存在矛盾，倾向
             else:
                 # Old format: alive_players is list of integers
                 non_wolf_players = [p for p in alive_players if p not in wolf_ids]
-            print(f"🔍 DEBUG: non_wolf_players: {non_wolf_players}")
+            # print(f"🔍 DEBUG: non_wolf_players: {non_wolf_players}")
         except Exception as e:
             print(f"🚨 ERROR in non_wolf_players calculation: {e}")
             print(f"🚨 ERROR: alive_players type: {type(alive_players)}, items: {alive_players}")
@@ -309,7 +309,7 @@ REASON: 根据玩家1和玩家2的发言，玩家3的逻辑存在矛盾，倾向
             raise
         
         if not non_wolf_players:
-            print("🔍 DEBUG: No non-wolf players available")
+            # print("🔍 DEBUG: No non-wolf players available")
             return {}
         
         # Get player names for display
@@ -637,7 +637,7 @@ TARGET:
 你必须做出选择，不能跳过。"""
         
         response = self.send_message(prompt, context)
-        # print(f"🧙‍♀️ 女巫 {self.name}({self.id}) 的私人决策：{response}")
+        print(f"🧙‍♀️ 女巫 {self.name}({self.id}) 的私人决策：{response}")
         
         # Strict parsing
         try:
@@ -661,13 +661,13 @@ TARGET:
             # print(f"🔍 DEBUG: Witch potion check - heal: {actual_has_heal}, poison: {actual_has_poison}")
             
             if action == "heal" and killed_player is not None and actual_has_heal:
-                # print(f"✅ 女巫 {self.name}({self.id}) 使用解药救 {killed_player}")
+                print(f"✅ 女巫 {self.name}({self.id}) 使用解药救 {killed_player}")
                 self.witch_potions["heal"] = False
                 return {"action": "heal", "target": killed_player}
             elif action == "poison" and target and actual_has_poison:
                 target_in_list = any(t[0] == target for t in display_targets)
                 if target_in_list and target != self.id:
-                    # print(f"✅ 女巫 {self.name}({self.id}) 使用毒药毒 {target}")
+                    print(f"✅ 女巫 {self.name}({self.id}) 使用毒药毒 {target}")
                     self.witch_potions["poison"] = False
                     return {"action": "poison", "target": target}
             elif action == "none":

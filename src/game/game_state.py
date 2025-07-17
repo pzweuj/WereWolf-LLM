@@ -35,6 +35,9 @@ class GameState:
         self.first_night_has_witness = True  # 首夜死亡有遗言
         self.max_rounds = 10  # 防止无限游戏
         
+        # Day context information
+        self.last_words_context: List[Dict[str, Any]] = []
+        
     def add_player(self, player: Player):
         """Add a player to the game"""
         self.players.append(player)
@@ -331,6 +334,17 @@ class GameState:
                 "speech": f"[玩家{p.name}的发言]"
             })
         
+        # Include last words from night deaths
+        last_words_info = []
+        if hasattr(self, 'last_words_context'):
+            for last_word in self.last_words_context:
+                last_words_info.append({
+                    "player": last_word["player"],
+                    "name": last_word["name"],
+                    "speech": last_word["speech"],
+                    "is_last_words": True
+                })
+        
         # Include all players with their current status
         all_players_info = []
         for p in self.players:
@@ -351,6 +365,7 @@ class GameState:
             "speaking_order": speaking_order,
             "my_position": player_index + 1,
             "speech_history": speech_history,
+            "last_words": last_words_info,
             "players_before_me": [
                 {"id": p.id, "name": p.name, "status": "alive" if p.is_alive() else "dead"} 
                 for p in players_who_spoke

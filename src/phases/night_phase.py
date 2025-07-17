@@ -297,8 +297,10 @@ class NightPhase:
                     }
                 else:
                     # print(f"🔍 DEBUG: Witch heal failed - target mismatch or potion used")
+                    pass
             except (ValueError, TypeError) as e:
                 # print(f"🔍 DEBUG: Witch heal failed - type conversion error: {e}")
+                pass
         
         elif action and action.get("action") == "poison":
             target = action.get("target")
