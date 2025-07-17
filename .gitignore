@@ -1,5 +1,6 @@
 # custom
 config/my_config_test.json
+*.jsonl
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
