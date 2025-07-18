@@ -878,7 +878,12 @@ TARGET:
             last_words_info += "\n🚫 绝对不要说遗言中查杀了你自己，除非遗言明确提到你的编号！"
         
         # Role-specific speech constraints
-        role_constraints = ""
+        role_constraints = """
+⚠️ 村民特殊注意：
+- 必须表明自己的好人身份
+- 根据场上情况，可以在发言时伪装为预言家或女巫或猎人，为他们挡刀
+- 游戏规则无警徽，请绝对避免提及警徽流
+- 发言要有逻辑性"""
         if self.role == Role.WEREWOLF:
             role_constraints = """
 ⚠️ 狼人特殊注意：
@@ -891,6 +896,7 @@ TARGET:
 ⚠️ 预言家特殊注意：
 - 可以基于查验结果透露自己是预言家
 - 可以基于查验结果做隐晦分析
+- 在需要展示身份时，明确表达自己是预言家
 - 避免暴露查验顺序"""
         elif self.role == Role.WITCH:
             role_constraints = """
@@ -901,7 +907,7 @@ TARGET:
         elif self.role == Role.HUNTER:
             role_constraints = """
 ⚠️ 猎人特殊注意：
-- 可以基于场面情况透露自己是猎人
+- 可以基于场面情况明确表示自己是猎人
 - 避免提及开枪能力"""
         
         # Special handling for seer's last words

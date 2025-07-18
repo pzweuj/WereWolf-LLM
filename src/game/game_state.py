@@ -38,6 +38,7 @@ class GameState:
         # Day context information
         self.last_words_context: List[Dict[str, Any]] = []
         self.day_speeches: Dict[int, List[Dict[str, Any]]] = {}  # round -> [speech_records]
+        self.last_words_printed: Dict[int, bool] = {}  # round -> printed_flag
         
     def add_player(self, player: Player):
         """Add a player to the game"""
@@ -339,12 +340,19 @@ class GameState:
         
         # Enhanced last words processing with validation and formatting
         last_words_info = []
-        last_word_print = 0
         if hasattr(self, 'last_words_context') and self.last_words_context:
-            print(f"🔍 DEBUG: 处理遗言信息 - 共 {len(self.last_words_context)} 条遗言")
+            # Only print debug info and last words once per round
+            if not self.last_words_printed.get(self.current_round, False):
+                print(f"🔍 DEBUG: 处理遗言信息 - 共 {len(self.last_words_context)} 条遗言")
+                self.last_words_printed[self.current_round] = True
+                
+                # Print each last word only once per round
+                for last_word in self.last_words_context:
+                    if self._validate_last_word_entry(last_word):
+                        print(f"😒遗言 - {last_word['name']}({last_word['player']}): {last_word['speech']}")
             
+            # Always process last words for context (but don't print again)
             for last_word in self.last_words_context:
-                # Validate last word entry
                 if self._validate_last_word_entry(last_word):
                     formatted_last_word = {
                         "player": last_word["player"],
@@ -355,14 +363,11 @@ class GameState:
                         "is_last_words": True
                     }
                     last_words_info.append(formatted_last_word)
-                    last_word_print += 1
-                    if last_word_print == 1:
-                        print(f"😒遗言 - {last_word['name']}({last_word['player']}): {last_word['speech']}")
-                    # print(f"🔍 DEBUG: 添加遗言 - {last_word['name']}({last_word['player']}): {last_word['speech'][:50]}...")
-                else:
-                    print(f"🔍 DEBUG: 跳过无效遗言条目: {last_word}")
         else:
-            print(f"🔍 DEBUG: 无遗言信息可用")
+            # Only print this debug message once per round
+            if not self.last_words_printed.get(self.current_round, False):
+                print(f"🔍 DEBUG: 无遗言信息可用")
+                self.last_words_printed[self.current_round] = True
         
         # Include all players with their current status
         all_players_info = []
