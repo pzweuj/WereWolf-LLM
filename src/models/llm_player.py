@@ -506,14 +506,14 @@ REASON: 预言家明确查杀了玩家3，且无其他玩家对跳预言家，�
 
 你是狼人团队的一员。当前狼人团队成员：{[f"玩家{wid}" for wid in wolf_team]}
 
-可选击杀目标（都是村民身份）：
+可选击杀目标（都是好人身份）：
 """
         for pid in non_wolf_players:
             name = target_names.get(pid, f"玩家{pid}")
             prompt += f"- {name}({pid})\n"
         
         prompt += f"""
-作为狼人团队，你们需要统一选择一个目标进行击杀。
+作为狼人团队，你们需要统一选择一个目标进行击杀。请你基于玩家的发言，确认最优先的击杀目标。
 
 请严格按照以下格式回复：
 KILL: [玩家ID]
@@ -803,7 +803,7 @@ TARGET:
 你必须做出选择，不能跳过。"""
         
         response = self.send_message(prompt, context)
-        print(f"🧙‍♀️ 女巫 {self.name}({self.id}) 的私人决策：{response}")
+        print(f"🧙‍♀️ 女巫 {self.name}({self.id}) 的私人决策：{response}".replace('\n', ''))
         
         # Strict parsing
         try:
