@@ -290,7 +290,7 @@ class NightPhase:
                     self.game_state.witch_heal_used = True
                     
                     print(f"🧙‍♀️ 女巫 {witch.name}({witch.id}) 使用解药救了 {target_int}")
-                    print(f"🔍 DEBUG: 女巫解药状态已更新 - witch_heal_used: {self.game_state.witch_heal_used}")
+                    # print(f"🔍 DEBUG: 女巫解药状态已更新 - witch_heal_used: {self.game_state.witch_heal_used}")
                     
                     return {
                         "type": "witch_heal",
@@ -372,8 +372,8 @@ class NightPhase:
         deaths = []
         
         # Debug: Print current state for troubleshooting
-        print(f"🔍 DEBUG: 处理夜晚行动 - wolf_kill_target = {self.game_state.wolf_kill_target}")
-        print(f"🔍 DEBUG: 处理夜晚行动 - witch_heal_used = {self.game_state.witch_heal_used}")
+        # print(f"🔍 DEBUG: 处理夜晚行动 - wolf_kill_target = {self.game_state.wolf_kill_target}")
+        # print(f"🔍 DEBUG: 处理夜晚行动 - witch_heal_used = {self.game_state.witch_heal_used}")
         
         # Wolf kill (unless healed by witch)
         if self.game_state.wolf_kill_target:
@@ -381,11 +381,12 @@ class NightPhase:
                 target_player = self.game_state.get_player_by_id(self.game_state.wolf_kill_target)
                 if target_player and target_player.is_alive():
                     deaths.append(self.game_state.wolf_kill_target)
-                    print(f"🔍 DEBUG: 狼人击杀生效 - 添加 {self.game_state.wolf_kill_target} 到死亡列表")
+                    # print(f"🔍 DEBUG: 狼人击杀生效 - 添加 {self.game_state.wolf_kill_target} 到死亡列表")
             else:
                 target_player = self.game_state.get_player_by_id(self.game_state.wolf_kill_target)
                 if target_player:
-                    print(f"🔍 DEBUG: 狼人击杀被女巫解药阻止 - {target_player.name}({self.game_state.wolf_kill_target}) 被救")
+                    pass
+                    # print(f"🔍 DEBUG: 狼人击杀被女巫解药阻止 - {target_player.name}({self.game_state.wolf_kill_target}) 被救")
         
         # Witch poison
         for event in self.night_events:
@@ -394,7 +395,7 @@ class NightPhase:
                 target_player = self.game_state.get_player_by_id(target)
                 if target_player and target_player.is_alive():
                     deaths.append(target)
-                    print(f"🔍 DEBUG: 女巫毒药生效 - 添加 {target} 到死亡列表")
+                    # print(f"🔍 DEBUG: 女巫毒药生效 - 添加 {target} 到死亡列表")
         
         # Remove duplicates and sort
         deaths = list(set(deaths))

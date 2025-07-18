@@ -125,11 +125,13 @@ class DayPhase:
         
         # Debug: Print last words context availability
         if hasattr(self.game_state, 'last_words_context') and self.game_state.last_words_context:
-            print(f"🔍 DEBUG: 白天讨论阶段 - 可用遗言信息: {len(self.game_state.last_words_context)} 条")
+            # print(f"🔍 DEBUG: 白天讨论阶段 - 可用遗言信息: {len(self.game_state.last_words_context)} 条")
             for lw in self.game_state.last_words_context:
-                print(f"🔍 DEBUG: 遗言 - {lw.get('name', 'Unknown')}({lw.get('player', 'N/A')}): {lw.get('speech', 'No speech')[:30]}...")
+                pass
+                # print(f"🔍 DEBUG: 遗言 - {lw.get('name', 'Unknown')}({lw.get('player', 'N/A')}): {lw.get('speech', 'No speech')[:30]}...")
         else:
-            print(f"🔍 DEBUG: 白天讨论阶段 - 无遗言信息")
+            pass
+            # print(f"🔍 DEBUG: 白天讨论阶段 - 无遗言信息")
         
         for i, player in enumerate(speaking_order):
             if player.is_alive():
@@ -166,7 +168,7 @@ class DayPhase:
                     context["available_last_words"] = formatted_last_words
                     context["last_words_summary"] = self._create_last_words_summary(formatted_last_words)
                     
-                    print(f"🔍 DEBUG: 为玩家 {player.name}({player.id}) 提供 {len(formatted_last_words)} 条遗言信息")
+                    # print(f"🔍 DEBUG: 为玩家 {player.name}({player.id}) 提供 {len(formatted_last_words)} 条遗言信息")
                 
                 speech = player.speak(context)
                 
