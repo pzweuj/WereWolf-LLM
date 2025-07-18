@@ -891,7 +891,7 @@ TARGET:
                     player_name = hw.get("player_name", "?")
                     player_id = hw.get("player_id", "?")
                     last_words = hw.get("last_words", "")
-                    historical_info += f"\n  第{round_num}轮 - {player_name}({player_id}): {last_words[:80]}..."
+                    historical_info += f"\n  第{round_num}轮 - {player_name}({player_id}): {last_words}"
             
             # 添加历史发言记录
             if historical_context.get("previous_rounds"):
@@ -900,10 +900,10 @@ TARGET:
                     round_num = round_data.get("round", "?")
                     speeches = round_data.get("speeches", [])
                     historical_info += f"\n  第{round_num}轮发言 ({len(speeches)}条):"
-                    for speech in speeches[:3]:  # 只显示前3条发言
+                    for speech in speeches:  # 只显示前3条发言
                         player_name = speech.get("player_name", "?")
                         content = speech.get("speech", "")
-                        historical_info += f"\n    - {player_name}: {content[:50]}..."
+                        historical_info += f"\n    - {player_name}: {content}"
             
             # 添加投票历史
             if historical_context.get("voting_history"):
@@ -968,11 +968,11 @@ LAST_WORDS: [你的遗言内容]
 
 遗言内容必须包含：
 1. 明确声明自己是预言家
-2. 公开所有查验结果（玩家ID和对应身份）
+2. 公开所有查验结果（查验的编号和查出的身份）
 3. 给出下一步好人阵营的建议
 
 示例遗言：
-LAST_WORDS: 我是预言家，我查验了玩家3是狼人，玩家5是好人。根据查验结果，玩家3肯定是狼人，建议好人优先投票淘汰他。
+LAST_WORDS: 我是预言家，我查验了编号3是狼人，编号5是好人。根据查验结果，编号3肯定是狼人，建议好人优先投票淘汰他。
 
 请发表你的遗言："""
         else:
@@ -1003,7 +1003,7 @@ SPEECH: [你的发言内容]
 11. **语气可以更活泼**
 
 示例发言：
-SPEECH: 我是第{my_position}个发言。根据前面张三的发言，我认为他的逻辑有些问题。他说自己是村民，但是对狼人行为的分析过于详细，这让我有些怀疑。不过这只是初步判断，还需要更多信息。
+SPEECH: 我是第{my_position}个发言，我是{self.name}，我的编号是{self.id}。根据前面张三的发言，我认为他的逻辑有些问题。他说自己是村民，但是对狼人行为的分析过于详细，这让我有些怀疑。不过这只是初步判断，还需要更多信息。
 
 请开始你的发言："""
         
