@@ -39,6 +39,8 @@ class GameState:
         self.last_words_context: List[Dict[str, Any]] = []
         self.day_speeches: Dict[int, List[Dict[str, Any]]] = {}  # round -> [speech_records]
         self.last_words_printed: Dict[int, bool] = {}  # round -> printed_flag
+        self.all_last_words: List[Dict[str, Any]] = []  # 所有轮次的遗言历史
+        self.voting_history: List[Dict[str, Any]] = []  # 投票历史记录
         
     def add_player(self, player: Player):
         """Add a player to the game"""
@@ -163,6 +165,12 @@ class GameState:
     
     def next_round(self):
         """Move to next round"""
+        # 保存当前轮次的遗言到历史记录
+        if self.last_words_context:
+            for last_word in self.last_words_context:
+                if last_word not in self.all_last_words:
+                    self.all_last_words.append(last_word)
+        
         self.current_round += 1
         self.phase = "night"
         self.night_actions.clear()
@@ -173,6 +181,9 @@ class GameState:
         self.hunter_shot = None
         self.deaths_this_night.clear()
         self.deaths_this_day.clear()
+        
+        # 清空当前轮次的遗言上下文，但保留历史记录
+        self.last_words_context.clear()
     
     def get_context_for_player(self, player_id: int, context_type: str = "public") -> Dict[str, Any]:
         """Get specific context based on player role and context type"""
@@ -397,6 +408,9 @@ class GameState:
             "previous_voting_results": self.current_round > 1
         }
         
+        # 添加历史信息
+        historical_context = self._build_historical_context()
+        
         return {
             "context_type": "day_public",
             "round": self.current_round,
@@ -418,11 +432,13 @@ class GameState:
                 {"id": p.id, "name": p.name, "status": "alive" if p.is_alive() else "dead"}
                 for p in players_remaining
             ],
+            "historical_context": historical_context,  # 添加历史上下文
             "context_instructions": {
                 "reminder": "这是真实的游戏信息，请基于实际发生的事件进行推理",
                 "first_round_note": f"这是第一轮游戏，{'但有死亡玩家的遗言信息需要重点关注' if len(last_words_info) > 0 else '没有前夜的查验结果或互动'}" if self.current_round == 1 else None,
                 "speech_note": "发言历史包含实际发言内容，如显示'尚未发言'则该玩家确实未发言",
-                "last_words_emphasis": f"死亡玩家的遗言包含重要信息，请仔细分析" if len(last_words_info) > 0 else None
+                "last_words_emphasis": f"死亡玩家的遗言包含重要信息，请仔细分析" if len(last_words_info) > 0 else None,
+                "historical_note": "历史信息包含之前轮次的重要内容，请结合历史信息进行分析" if historical_context["has_history"] else None
             }
         }
     
@@ -508,6 +524,91 @@ class GameState:
         
         self.day_speeches[self.current_round].append(speech_record)
         return True
+    
+    def _build_historical_context(self) -> Dict[str, Any]:
+        """构建历史上下文信息"""
+        historical_context = {
+            "has_history": False,
+            "previous_rounds": [],
+            "all_last_words": [],
+            "voting_history": [],
+            "eliminated_players": []
+        }
+        
+        # 如果是第一轮，没有历史信息
+        if self.current_round <= 1:
+            return historical_context
+        
+        historical_context["has_history"] = True
+        
+        # 添加所有历史遗言
+        if self.all_last_words:
+            historical_context["all_last_words"] = [
+                {
+                    "round": lw.get("round", 1),
+                    "player_id": lw["player"],
+                    "player_name": lw["name"],
+                    "last_words": lw["speech"],
+                    "death_reason": lw.get("death_reason", "夜晚死亡")
+                }
+                for lw in self.all_last_words
+            ]
+        
+        # 添加历史发言记录
+        previous_rounds_data = []
+        for round_num in range(1, self.current_round):
+            if round_num in self.day_speeches:
+                round_speeches = self.day_speeches[round_num]
+                previous_rounds_data.append({
+                    "round": round_num,
+                    "speeches": [
+                        {
+                            "player_id": speech["player"],
+                            "player_name": speech["name"],
+                            "speech": speech["speech"][:100] + "..." if len(speech["speech"]) > 100 else speech["speech"],  # 截断长发言
+                            "speaking_order": speech.get("speaking_order", 0)
+                        }
+                        for speech in round_speeches
+                    ]
+                })
+        
+        historical_context["previous_rounds"] = previous_rounds_data
+        
+        # 添加投票历史
+        if self.voting_history:
+            historical_context["voting_history"] = self.voting_history
+        
+        # 添加已淘汰玩家信息
+        dead_players = self.get_dead_players()
+        if dead_players:
+            historical_context["eliminated_players"] = [
+                {
+                    "player_id": p.id,
+                    "player_name": p.name,
+                    "role": p.role.value,
+                    "elimination_round": getattr(p, 'elimination_round', 'unknown')
+                }
+                for p in dead_players
+            ]
+        
+        return historical_context
+    
+    def record_voting_result(self, round_num: int, eliminated_player: Optional[int], vote_count: Dict[int, int]):
+        """记录投票结果到历史"""
+        voting_record = {
+            "round": round_num,
+            "eliminated_player": eliminated_player,
+            "vote_count": vote_count,
+            "timestamp": datetime.now()
+        }
+        
+        if eliminated_player:
+            eliminated_player_obj = self.get_player_by_id(eliminated_player)
+            if eliminated_player_obj:
+                voting_record["eliminated_name"] = eliminated_player_obj.name
+                voting_record["eliminated_role"] = eliminated_player_obj.role.value
+        
+        self.voting_history.append(voting_record)
     
     def _get_basic_context(self, player: Player) -> Dict[str, Any]:
         """Basic context for general use"""

@@ -877,6 +877,44 @@ TARGET:
             last_words_info += "\n💡 如果遗言中提到查杀某个玩家，请准确记住是哪个玩家被查杀！"
             last_words_info += "\n🚫 绝对不要说遗言中查杀了你自己，除非遗言明确提到你的编号！"
         
+        # Add historical context information if available
+        historical_info = ""
+        historical_context = context.get("historical_context", {})
+        if historical_context.get("has_history"):
+            historical_info = "\n\n📚 历史游戏信息（重要参考）："
+            
+            # 添加历史遗言
+            if historical_context.get("all_last_words"):
+                historical_info += "\n\n🗣️ 历史遗言记录："
+                for hw in historical_context["all_last_words"]:
+                    round_num = hw.get("round", "?")
+                    player_name = hw.get("player_name", "?")
+                    player_id = hw.get("player_id", "?")
+                    last_words = hw.get("last_words", "")
+                    historical_info += f"\n  第{round_num}轮 - {player_name}({player_id}): {last_words[:80]}..."
+            
+            # 添加历史发言记录
+            if historical_context.get("previous_rounds"):
+                historical_info += "\n\n💬 历史发言记录："
+                for round_data in historical_context["previous_rounds"]:
+                    round_num = round_data.get("round", "?")
+                    speeches = round_data.get("speeches", [])
+                    historical_info += f"\n  第{round_num}轮发言 ({len(speeches)}条):"
+                    for speech in speeches[:3]:  # 只显示前3条发言
+                        player_name = speech.get("player_name", "?")
+                        content = speech.get("speech", "")
+                        historical_info += f"\n    - {player_name}: {content[:50]}..."
+            
+            # 添加投票历史
+            if historical_context.get("voting_history"):
+                historical_info += "\n\n🗳️ 历史投票记录："
+                for vote_record in historical_context["voting_history"]:
+                    round_num = vote_record.get("round", "?")
+                    eliminated_name = vote_record.get("eliminated_name", "无人")
+                    historical_info += f"\n  第{round_num}轮: {eliminated_name}被淘汰"
+            
+            historical_info += "\n\n💡 请结合历史信息和当前情况进行综合分析！"
+        
         # Role-specific speech constraints
         role_constraints = """
 ⚠️ 村民特殊注意：
@@ -942,7 +980,7 @@ LAST_WORDS: 我是预言家，我查验了玩家3是狼人，玩家5是好人。
 
 === 当前发言环境 ===
 - 你是第{my_position}个发言的玩家
-{chr(10).join(f'- {item}' for item in speech_context)}{last_words_info}
+{chr(10).join(f'- {item}' for item in speech_context)}{last_words_info}{historical_info}
 
 === 身份限制 ==={role_constraints}
 
