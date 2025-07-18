@@ -408,6 +408,15 @@ class GameState:
             "previous_voting_results": self.current_round > 1
         }
         
+        # Add reality constraints information
+        reality_constraints = {
+            "current_round": self.current_round,
+            "is_first_round": self.current_round == 1,
+            "available_information": self._get_available_information(),
+            "forbidden_claims": self._get_forbidden_claims(player),
+            "required_disclaimers": self._get_required_disclaimers()
+        }
+        
         # 添加历史信息
         historical_context = self._build_historical_context()
         
@@ -433,6 +442,7 @@ class GameState:
                 for p in players_remaining
             ],
             "historical_context": historical_context,  # 添加历史上下文
+            "reality_constraints": reality_constraints,  # 添加现实约束信息
             "context_instructions": {
                 "reminder": "这是真实的游戏信息，请基于实际发生的事件进行推理",
                 "first_round_note": f"这是第一轮游戏，{'但有死亡玩家的遗言信息需要重点关注' if len(last_words_info) > 0 else '没有前夜的查验结果或互动'}" if self.current_round == 1 else None,
@@ -441,6 +451,12 @@ class GameState:
                 "historical_note": "历史信息包含之前轮次的重要内容，请结合历史信息进行分析" if historical_context["has_history"] else None
             }
         }
+        
+        # Apply first round filtering if needed
+        if self.current_round == 1:
+            return self._filter_context_for_first_round(context)
+        
+        return context
     
     def _validate_last_word_entry(self, last_word: Dict[str, Any]) -> bool:
         """Validate last word entry format and content"""
@@ -609,6 +625,89 @@ class GameState:
                 voting_record["eliminated_role"] = eliminated_player_obj.role.value
         
         self.voting_history.append(voting_record)
+    
+    def _get_available_information(self) -> List[str]:
+        """获取当前轮次可用的信息类型"""
+        available = ["玩家列表和编号", "夜晚死亡公告"]
+        
+        if hasattr(self, 'last_words_context') and self.last_words_context:
+            available.append("死亡玩家遗言")
+        
+        if self.current_round > 1:
+            available.extend([
+                "历史发言记录",
+                "历史投票结果",
+                "已淘汰玩家信息"
+            ])
+        
+        return available
+    
+    def _get_forbidden_claims(self, player: Player) -> List[str]:
+        """获取该玩家禁止声称的身份"""
+        forbidden = []
+        
+        if player.role == Role.VILLAGER:
+            forbidden = ["预言家", "女巫", "猎人", "狼人"]
+        elif player.role == Role.WEREWOLF:
+            # 狼人可以假跳，但需要策略理由
+            forbidden = []  # 允许策略性假跳
+        elif player.role == Role.SEER:
+            forbidden = ["女巫", "猎人", "狼人"]
+        elif player.role == Role.WITCH:
+            forbidden = ["预言家", "猎人", "狼人"]
+        elif player.role == Role.HUNTER:
+            forbidden = ["预言家", "女巫", "狼人"]
+        
+        return forbidden
+    
+    def _get_required_disclaimers(self) -> List[str]:
+        """获取必要的免责声明和约束提醒"""
+        disclaimers = [
+            "只能基于真实发生的游戏事件进行推理",
+            "不能编造不存在的玩家互动或发言内容",
+            "身份声明必须符合游戏规则和策略需要"
+        ]
+        
+        if self.current_round == 1:
+            disclaimers.extend([
+                "第一轮游戏没有前夜信息可供分析",
+                "不能引用不存在的历史互动或查验结果",
+                "应该基于基础游戏规则进行推理"
+            ])
+        
+        return disclaimers
+    
+    def _filter_context_for_first_round(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """为第一轮游戏过滤上下文信息"""
+        if self.current_round != 1:
+            return context
+        
+        # 为第一轮添加特殊约束
+        first_round_constraints = {
+            "no_previous_night_info": True,
+            "no_interaction_history": True,
+            "focus_on_basic_logic": True,
+            "available_info_only": [
+                "夜晚死亡公告",
+                "死亡玩家遗言（如果有）",
+                "玩家列表和编号"
+            ],
+            "forbidden_references": [
+                "前夜查验结果",
+                "复杂互动分析",
+                "历史行为模式",
+                "投票历史"
+            ]
+        }
+        
+        context["first_round_constraints"] = first_round_constraints
+        context["guidance"] = {
+            "analysis_focus": "遗言信息和基础游戏规则",
+            "avoid_topics": ["前夜查验", "复杂互动", "历史行为"],
+            "recommended_approach": "谨慎分析，基于事实发言"
+        }
+        
+        return context
     
     def _get_basic_context(self, player: Player) -> Dict[str, Any]:
         """Basic context for general use"""

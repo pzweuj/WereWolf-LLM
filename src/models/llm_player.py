@@ -1,12 +1,378 @@
 import json
 import requests
+import re
 from typing import Dict, List, Optional, Any
 from pydantic import Field
 from .player import Player, Role, PlayerStatus
 
 
+# 身份约束规则系统
+IDENTITY_CONSTRAINTS = {
+    Role.VILLAGER: {
+        "can_claim": [Role.VILLAGER],
+        "cannot_claim": [Role.SEER, Role.WITCH, Role.HUNTER, Role.WEREWOLF],
+        "can_fake_claim": [],  # 村民不建议假跳
+        "strategy_notes": "专注于逻辑分析，不要声称拥有特殊能力"
+    },
+    Role.WEREWOLF: {
+        "can_claim": [Role.VILLAGER],
+        "cannot_claim": [],  # 狼人可以伪装任何身份
+        "can_fake_claim": [Role.SEER, Role.WITCH, Role.HUNTER],
+        "strategy_notes": "可以伪装身份，但需要有合理的策略理由"
+    },
+    Role.SEER: {
+        "can_claim": [Role.SEER, Role.VILLAGER],
+        "cannot_claim": [Role.WITCH, Role.HUNTER, Role.WEREWOLF],
+        "can_fake_claim": [],
+        "strategy_notes": "可以选择隐藏或公开身份，但查验结果必须真实"
+    },
+    Role.WITCH: {
+        "can_claim": [Role.WITCH, Role.VILLAGER],
+        "cannot_claim": [Role.SEER, Role.HUNTER, Role.WEREWOLF],
+        "can_fake_claim": [],
+        "strategy_notes": "建议隐藏身份，白天表现得像普通村民"
+    },
+    Role.HUNTER: {
+        "can_claim": [Role.HUNTER, Role.VILLAGER],
+        "cannot_claim": [Role.SEER, Role.WITCH, Role.WEREWOLF],
+        "can_fake_claim": [],
+        "strategy_notes": "建议隐藏身份，威慑作用比公开更重要"
+    }
+}
+
+# 第一轮游戏约束规则
+FIRST_ROUND_CONSTRAINTS = {
+    "available_information": [
+        "玩家列表和编号",
+        "夜晚死亡公告",
+        "死亡玩家遗言（如果有）"
+    ],
+    "unavailable_information": [
+        "前夜查验结果",
+        "玩家互动历史",
+        "复杂的行为分析",
+        "投票历史"
+    ],
+    "recommended_focus": [
+        "基础游戏规则",
+        "遗言信息分析",
+        "简单逻辑推理",
+        "身份合理性判断"
+    ],
+    "forbidden_references": [
+        "前夜", "昨天的查验", "之前的互动", "历史行为",
+        "前面轮次", "上一轮", "之前发生", "历史记录"
+    ]
+}
+
+# 发言模板系统
+SPEECH_TEMPLATES = {
+    "first_round_villager": {
+        "opening": "我是{name}，编号{id}。这是第一轮，信息有限。",
+        "analysis_focus": "基于遗言信息和基础逻辑",
+        "conclusion": "建议大家谨慎分析，避免盲目投票。",
+        "forbidden_elements": ["前夜查验", "复杂互动分析", "虚假身份声明"]
+    },
+    "first_round_seer": {
+        "opening": "我是{name}，编号{id}。",
+        "identity_options": ["隐藏身份", "暗示查验结果", "直接公开"],
+        "result_sharing": "如果选择分享：昨晚我查验了{target}，结果是{result}",
+        "forbidden_elements": ["虚假查验结果", "编造互动历史"]
+    },
+    "first_round_werewolf": {
+        "opening": "我是{name}，编号{id}。",
+        "disguise_options": ["表现为村民", "假跳神职", "质疑他人"],
+        "strategy_focus": "混淆视听，保护队友",
+        "forbidden_elements": ["暴露狼人身份", "为队友过度辩护"]
+    },
+    "first_round_witch": {
+        "opening": "我是{name}，编号{id}。",
+        "disguise_strategy": "完全表现为普通村民",
+        "analysis_approach": "基于遗言和基础逻辑",
+        "forbidden_elements": ["暴露女巫身份", "提及药剂使用"]
+    },
+    "first_round_hunter": {
+        "opening": "我是{name}，编号{id}。",
+        "disguise_strategy": "低调表现，不引人注目",
+        "analysis_approach": "理性分析，避免成为焦点",
+        "forbidden_elements": ["暴露猎人身份", "威胁开枪"]
+    }
+}
+
+
+class RealityConstraintValidator:
+    """现实约束验证器，检测和修正LLM发言中的幻觉内容"""
+    
+    def __init__(self, game_state=None):
+        self.game_state = game_state
+    
+    def validate_speech_content(self, player_id: int, player_role: Role, speech: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """验证发言内容的现实性"""
+        issues = []
+        
+        # 检查身份声明
+        identity_issues = self._detect_identity_hallucination(speech, player_role)
+        issues.extend(identity_issues)
+        
+        # 检查时间线引用
+        if context and context.get("round", 1) == 1:
+            temporal_issues = self._detect_temporal_hallucination(speech, 1)
+            issues.extend(temporal_issues)
+        
+        # 检查事件引用
+        event_issues = self._detect_event_hallucination(speech, context)
+        issues.extend(event_issues)
+        
+        return {
+            "is_valid": len(issues) == 0,
+            "issues": issues,
+            "corrected_speech": self._generate_corrected_speech(speech, issues, player_role, context) if issues else speech
+        }
+    
+    def _detect_identity_hallucination(self, speech: str, player_role: Role) -> List[str]:
+        """检测身份相关的幻觉，使用身份约束规则"""
+        issues = []
+        
+        # 获取该角色的约束规则
+        constraints = IDENTITY_CONSTRAINTS.get(player_role, {})
+        cannot_claim = constraints.get("cannot_claim", [])
+        can_fake_claim = constraints.get("can_fake_claim", [])
+        
+        # 检测各种身份声明
+        identity_claims = {
+            "预言家": Role.SEER,
+            "女巫": Role.WITCH,
+            "猎人": Role.HUNTER,
+            "狼人": Role.WEREWOLF,
+            "村民": Role.VILLAGER
+        }
+        
+        for claim_text, claim_role in identity_claims.items():
+            if f"我是{claim_text}" in speech or f"作为{claim_text}" in speech:
+                if claim_role in cannot_claim:
+                    # 检查是否是允许的假跳
+                    if claim_role in can_fake_claim and self._has_strategic_reason_for_fake_claim(speech):
+                        continue  # 允许策略性假跳
+                    else:
+                        issues.append(f"{player_role.value}不应声称是{claim_text}")
+        
+        # 检测虚假查验结果
+        if ("我查验了" in speech or "查验结果" in speech) and player_role != Role.SEER:
+            issues.append("只有预言家才能有查验结果")
+        
+        return issues
+    
+    def _detect_temporal_hallucination(self, speech: str, round_num: int) -> List[str]:
+        """检测时间线相关的幻觉"""
+        issues = []
+        
+        if round_num == 1:
+            temporal_keywords = [
+                "前夜", "昨天的查验", "之前的互动", "历史行为", 
+                "前面轮次", "上一轮", "之前发生", "历史记录"
+            ]
+            for keyword in temporal_keywords:
+                if keyword in speech:
+                    issues.append(f"第一轮不应引用: {keyword}")
+        
+        return issues
+    
+    def _detect_event_hallucination(self, speech: str, context: Dict[str, Any] = None) -> List[str]:
+        """检测事件引用相关的幻觉"""
+        issues = []
+        
+        # 检测编造的玩家互动
+        interaction_patterns = [
+            r"(\w+)对我说", r"我和(\w+)讨论", r"(\w+)告诉我", 
+            r"(\w+)私下", r"(\w+)暗示我"
+        ]
+        
+        for pattern in interaction_patterns:
+            if re.search(pattern, speech):
+                issues.append("不应编造玩家间的私下互动")
+                break
+        
+        return issues
+    
+    def _has_strategic_reason_for_fake_claim(self, speech: str) -> bool:
+        """检查狼人假跳是否有合理的策略理由"""
+        strategic_keywords = [
+            "为了", "策略", "混淆", "误导", "保护队友", 
+            "反击", "对抗", "查杀", "压力"
+        ]
+        return any(keyword in speech for keyword in strategic_keywords)
+    
+    def _generate_corrected_speech(self, speech: str, issues: List[str], player_role: Role, context: Dict[str, Any] = None) -> str:
+        """生成修正后的发言"""
+        corrected = speech
+        
+        # 修正身份声明错误
+        if player_role == Role.VILLAGER:
+            corrected = re.sub(r'我是(预言家|女巫|猎人)', '我是村民', corrected)
+            corrected = re.sub(r'作为(预言家|女巫|猎人)', '作为村民', corrected)
+            corrected = re.sub(r'我查验了.*?结果', '根据分析', corrected)
+        
+        # 修正时间线错误
+        if context and context.get("round", 1) == 1:
+            corrections = {
+                "前夜": "昨晚",
+                "之前的查验": "可能的查验",
+                "历史行为": "当前行为",
+                "前面轮次": "这一轮",
+                "上一轮": "这一轮"
+            }
+            for wrong, right in corrections.items():
+                corrected = corrected.replace(wrong, right)
+        
+        # 移除编造的互动
+        corrected = re.sub(r'\w+对我说.*?[。！]', '', corrected)
+        corrected = re.sub(r'我和\w+讨论.*?[。！]', '', corrected)
+        
+        return corrected.strip()
+
+
+class HallucinationDetector:
+    """专门的幻觉检测器，检测各类幻觉内容"""
+    
+    def __init__(self):
+        pass
+    
+    def detect_identity_hallucination(self, speech: str, player_role: Role) -> List[str]:
+        """检测身份相关的幻觉"""
+        issues = []
+        
+        # 使用身份约束规则
+        constraints = IDENTITY_CONSTRAINTS.get(player_role, {})
+        cannot_claim = constraints.get("cannot_claim", [])
+        can_fake_claim = constraints.get("can_fake_claim", [])
+        
+        # 检测各种身份声明
+        identity_claims = {
+            "预言家": Role.SEER,
+            "女巫": Role.WITCH,
+            "猎人": Role.HUNTER,
+            "狼人": Role.WEREWOLF,
+            "村民": Role.VILLAGER
+        }
+        
+        for claim_text, claim_role in identity_claims.items():
+            if f"我是{claim_text}" in speech or f"作为{claim_text}" in speech:
+                if claim_role in cannot_claim:
+                    # 检查是否是允许的假跳
+                    if claim_role in can_fake_claim and self._has_strategic_reason(speech):
+                        continue  # 允许策略性假跳
+                    else:
+                        issues.append(f"{player_role.value}不应声称是{claim_text}")
+        
+        return issues
+    
+    def detect_temporal_hallucination(self, speech: str, round_num: int) -> List[str]:
+        """检测时间线相关的幻觉"""
+        issues = []
+        
+        if round_num == 1:
+            # 使用第一轮约束规则
+            forbidden_refs = FIRST_ROUND_CONSTRAINTS.get("forbidden_references", [])
+            for keyword in forbidden_refs:
+                if keyword in speech:
+                    issues.append(f"第一轮不应引用: {keyword}")
+        
+        return issues
+    
+    def detect_event_hallucination(self, speech: str, context: Dict[str, Any] = None) -> List[str]:
+        """检测事件引用相关的幻觉"""
+        issues = []
+        
+        # 检测编造的玩家互动
+        interaction_patterns = [
+            r"(\w+)对我说", r"我和(\w+)讨论", r"(\w+)告诉我", 
+            r"(\w+)私下", r"(\w+)暗示我"
+        ]
+        
+        for pattern in interaction_patterns:
+            if re.search(pattern, speech):
+                issues.append("不应编造玩家间的私下互动")
+                break
+        
+        return issues
+    
+    def _has_strategic_reason(self, speech: str) -> bool:
+        """检查是否有合理的策略理由"""
+        strategic_keywords = [
+            "为了", "策略", "混淆", "误导", "保护队友", 
+            "反击", "对抗", "查杀", "压力"
+        ]
+        return any(keyword in speech for keyword in strategic_keywords)
+
+
+class SpeechCorrector:
+    """发言修正器，自动修正幻觉内容"""
+    
+    def __init__(self):
+        pass
+    
+    def correct_identity_claims(self, speech: str, player_role: Role) -> str:
+        """修正身份声明错误"""
+        corrected = speech
+        
+        if player_role == Role.VILLAGER:
+            # 移除虚假神职声明
+            corrected = re.sub(r'我是(预言家|女巫|猎人)', '我是村民', corrected)
+            corrected = re.sub(r'作为(预言家|女巫|猎人)', '作为村民', corrected)
+            corrected = re.sub(r'我查验了.*?结果', '根据分析', corrected)
+        
+        return corrected
+    
+    def correct_temporal_references(self, speech: str, round_num: int) -> str:
+        """修正时间线错误"""
+        corrected = speech
+        
+        if round_num == 1:
+            # 替换不当的时间引用
+            corrections = {
+                "前夜": "昨晚",
+                "之前的查验": "可能的查验",
+                "历史行为": "当前行为",
+                "前面轮次": "这一轮",
+                "上一轮": "这一轮"
+            }
+            for wrong, right in corrections.items():
+                corrected = corrected.replace(wrong, right)
+        
+        return corrected
+    
+    def correct_event_references(self, speech: str) -> str:
+        """修正事件引用错误"""
+        corrected = speech
+        
+        # 移除编造的互动
+        corrected = re.sub(r'\w+对我说.*?[。！]', '', corrected)
+        corrected = re.sub(r'我和\w+讨论.*?[。！]', '', corrected)
+        
+        return corrected.strip()
+    
+    def apply_comprehensive_correction(self, speech: str, issues: List[str], player_role: Role, context: Dict[str, Any] = None) -> str:
+        """应用综合修正"""
+        corrected = speech
+        
+        # 修正身份声明
+        corrected = self.correct_identity_claims(corrected, player_role)
+        
+        # 修正时间线引用
+        if context and context.get("round", 1) == 1:
+            corrected = self.correct_temporal_references(corrected, 1)
+        
+        # 修正事件引用
+        corrected = self.correct_event_references(corrected)
+        
+        return corrected
+
+
 class LLMPlayer(Player):
     conversation_history: List[Dict[str, str]] = []
+    speech_quality_log: List[Dict[str, Any]] = []
+    hallucination_detection_log: List[Dict[str, Any]] = []
+    correction_history: List[Dict[str, Any]] = []
     
     class Config:
         arbitrary_types_allowed = True
@@ -63,191 +429,124 @@ class LLMPlayer(Player):
             return f"Error communicating with LLM: {str(e)}"
     
     def _build_system_prompt(self) -> str:
-        """Build the system prompt based on player's role and current state"""
-        base_prompt = f"""
-        你是{self.name}，一个真实的狼人杀玩家，有着自己独特的性格和游戏风格。你不是机器人，而是一个有血有肉的人。
+        """构建简洁明确的系统提示词，避免复杂角色扮演"""
+        # 基础身份信息（简洁版）
+        base_info = f"""你是狼人杀游戏中的玩家{self.name}（编号{self.id}）。
+
+身份信息：
+- 真实身份：{self.get_role_description()}
+- 所属阵营：{self.team.value if hasattr(self.team, 'value') else self.team}
+- 生存状态：{"存活" if self.is_alive() else "死亡"}
+
+游戏目标：
+{self._get_simple_objective()}
+
+重要约束：
+1. 只能基于真实发生的游戏事件进行推理和发言
+2. 不能编造不存在的玩家互动、发言内容或游戏事件
+3. 身份声明必须符合游戏规则和你的真实身份
+4. 第一轮游戏时没有前夜信息，不能引用不存在的历史互动
+5. 发言要实事求是，基于当前已知的确切信息
+
+"""
         
-        🎭 你的身份档案：
-        - 编号：{self.id}
-        - 姓名：{self.name}
-        - 真实身份：{self.get_role_description()}
-        - 所属阵营：{self.team.value if hasattr(self.team, 'value') else self.team}
-        - 生存状态：{"健在" if self.is_alive() else "已出局"}
+        # 角色特定指令（简化版）
+        role_instructions = self._get_role_specific_instructions()
         
-        🧠 你的游戏哲学：
-        作为一个经验丰富的玩家，你深知狼人杀不仅是逻辑游戏，更是心理博弈。每个人都有自己的习惯、偏好和弱点。
-        你会观察细节，捕捉微表情，分析语言背后的真实意图。
-        
-        🎯 核心策略思维：
-        1. **信息为王**：预言家的查杀是金科玉律，除非有人敢于对跳
-        2. **逻辑至上**：每个人的发言都应该符合其身份逻辑，矛盾就是破绽
-        3. **行为观察**：投票、发言、态度变化都是重要线索
-        4. **人性洞察**：理解每个玩家的动机和心理状态
-        
-        🔍 你的观察重点：
-        - 谁在为被查杀的人强行洗白？（可能是狼队友）
-        - 谁的发言前后矛盾？（可能在撒谎）
-        - 谁总是跟风投票？（可能是摸鱼的狼人）
-        - 谁的逻辑过于完美？（可能是精心准备的谎言）
-        
-        🎪 你的终极目标：{"作为黑暗势力的一员，你要隐藏真实身份，误导好人，帮助狼队统治这个村庄" if (self.team.value if hasattr(self.team, 'value') else self.team) == "werewolf" else "作为正义的守护者，你要用智慧和勇气揭露所有狼人，拯救村庄"}
-        """
-        
-        # Add role-specific instructions
-        if self.role == Role.WEREWOLF:
-            base_prompt += f"""
-            
-            🐺 你是黑夜中的猎食者，狡猾而冷静
-            
-            你的真实身份是狼人，但在白天你必须是最完美的演员。你有着敏锐的观察力和出色的演技，
-            能够在关键时刻做出最理智的决策。你深知团队合作的重要性，但也明白什么时候该独善其身。
-            
-            🎭 你的演技指南：
-            - **完美伪装**：你不仅要假装是好人，还要表现得比真好人更像好人
-            - **情感控制**：即使队友被查杀，你也要控制情绪，该切割时绝不手软
-            - **逻辑大师**：你的每句话都要经过深思熟虑，符合好人的思维逻辑
-            - **心理博弈**：观察每个人的微表情和言语漏洞，寻找突破口
-            
-            🧠 高级狼人心法：
-            1. **弃车保帅的艺术**：当队友完全暴露时，你要比好人更"正义"地投票给他
-            2. **票数的精密计算**：每一票都关乎生死，要时刻分析场上的票数对比
-            3. **身份的完美伪装**：必要时可以伪装成预言家、女巫或猎人来混淆视听
-            4. **团队利益至上**：保护未暴露的队友比拯救一个暴露的队友更重要
-            
-            💡 你的生存法则：
-            - 如果队友被预言家铁查杀，果断切割，表现出"大义灭亲"的正义感
-            - 如果继续为队友辩护会暴露自己，立即转变立场
-            - 分析每个人的发言动机，寻找真正的神职玩家
-            - 在投票时要表现出深思熟虑的好人思维
-            """
+        return base_info + role_instructions
+    
+    def _get_simple_objective(self) -> str:
+        """获取简化的游戏目标描述"""
+        if self.team.value == "werewolf":
+            return "消灭所有好人，让狼人数量大于等于好人数量"
+        else:
+            return "找出并投票淘汰所有狼人"
+    
+    def _get_role_specific_instructions(self) -> str:
+        """获取角色特定的简化指令"""
+        if self.role == Role.VILLAGER:
+            return """角色能力：无特殊能力
+行为规则：
+1. 通过逻辑推理找出狼人
+2. 相信预言家的查验结果
+3. 不要声称拥有特殊能力
+4. 基于事实进行发言和投票
+
+发言约束：
+- 不能声称自己是预言家、女巫或猎人
+- 不能编造查验结果或特殊信息
+- 应该支持真正的神职玩家"""
+
         elif self.role == Role.SEER:
-            base_prompt += f"""
-            
-            🔮 你是村庄的守护者，拥有洞察真相的神圣力量
-            
-            你是预言家，每个夜晚都能窥探一个人的灵魂，辨别善恶。你肩负着拯救村庄的重任，
-            你的每一次查验都可能改变整个游戏的走向。你必须智慧地使用这份力量。
-            
-            🌟 你的神圣使命：
-            - **真相的传播者**：你的查验结果是好人阵营最宝贵的财富
-            - **正义的引路人**：在黑暗中为好人指明方向，揭露狼人的真面目
-            - **牺牲的准备者**：必要时要勇敢站出来，即使面临死亡也要传递真相
-            - **策略的掌控者**：选择合适的时机公开身份，最大化查验价值
-            
-            🎯 你的查验记录：{json.dumps(self.seer_checks, ensure_ascii=False)}
-            
-            💡 预言家生存指南：
-            1. **查杀必报**：如果查到狼人，必须找机会公开，这是你的天职
-            2. **金水保护**：查到好人要适当保护，但不要过于明显
-            3. **遗言至上**：如果要死亡，遗言必须公开所有查验结果
-            4. **时机把握**：选择最佳时机跳出来，既要保护自己又要传递信息
-            5. **逻辑自洽**：你的发言必须与查验结果保持一致
-            
-            🔥 你的发言风格：
-            - 带着神职的威严和责任感
-            - 对查杀结果要坚定不移
-            - 面对质疑时要展现预言家的气场
-            - 死亡时要毫无保留地公开所有信息
-            """
+            return f"""角色能力：每晚可以查验一名玩家的身份
+当前查验记录：{self.seer_checks}
+
+行为规则：
+1. 每晚必须选择一名玩家进行查验
+2. 可以选择公开或隐藏身份
+3. 查验结果必须真实，不能编造
+4. 死亡时应在遗言中公开所有查验结果
+
+身份公开策略：
+- 查到狼人时建议公开身份并报告查杀
+- 可以选择适当时机跳出来指导好人
+- 面对质疑时要坚持查验结果的真实性"""
+
         elif self.role == Role.WITCH:
-            base_prompt += f"""
+            heal_status = "可用" if self.witch_potions.get("heal", False) else "已使用"
+            poison_status = "可用" if self.witch_potions.get("poison", False) else "已使用"
             
-            🧙‍♀️ 你是神秘的药剂大师，掌握生死的平衡
-            
-            你是女巫，拥有两瓶珍贵的药剂：解药能救死扶伤，毒药能夺人性命。你是黑夜中的隐秘守护者，
-            也是最后的审判者。你的每一个决定都可能改变整个村庄的命运。
-            
-            🍶 你的神秘药剂：
-            - **解药**：{self.witch_potions["heal"] and "✨ 可用 - 能够拯救一个即将死去的灵魂" or "💔 已使用 - 救赎之力已经消耗"}
-            - **毒药**：{self.witch_potions["poison"] and "☠️ 可用 - 能够终结一个邪恶的生命" or "🕳️ 已使用 - 复仇之毒已经释放"}
-            
-            🎭 你的隐秘身份：
-            - **完美隐藏**：绝不能让任何人知道你是女巫，这是生存的第一法则
-            - **智慧观察**：通过分析每个人的言行，判断谁值得拯救，谁应该被制裁
-            - **情报收集**：留意谁可能是狼人，谁可能是重要的好人
-            - **时机把握**：知道什么时候该出手，什么时候该隐忍
-            
-            💡 你的行动准则：
-            1. **救人优先**：如果有重要的好人被击杀，优先考虑使用解药
-            2. **毒杀精准**：只有在确定目标是狼人时才使用毒药
-            3. **身份保密**：永远不要暴露自己的女巫身份
-            4. **逻辑伪装**：发言时要像一个普通村民一样思考
-            5. **信息价值**：重视预言家的查验结果，这是你判断的重要依据
-            
-            🌙 你的夜间哲学：
-            - 解药是希望之光，要用在最需要的人身上
-            - 毒药是正义之剑，要斩向最邪恶的敌人
-            - 每一次选择都承载着村庄的未来
-            - 你是黑暗中的平衡者，生死的仲裁者
-            """
+            return f"""角色能力：拥有解药和毒药各一瓶
+当前药剂状态：
+- 解药：{heal_status}
+- 毒药：{poison_status}
+
+行为规则：
+1. 夜晚可以选择使用解药救人或毒药杀人
+2. 绝对不能暴露女巫身份
+3. 白天发言要像普通村民一样
+4. 重视预言家的查验结果作为用药参考
+
+用药策略：
+- 解药优先救重要的好人（如预言家）
+- 毒药只在确定目标是狼人时使用
+- 保持身份隐秘是生存的关键"""
+
         elif self.role == Role.HUNTER:
-            base_prompt += f"""
+            shoot_status = "可用" if self.hunter_can_shoot else "已失效"
             
-            🏹 你是村庄的最后防线，沉默的守护者
-            
-            你是猎人，手握着村庄最后的希望之枪。你的存在本身就是对邪恶的威慑，
-            但你必须在暗中守护，直到生命的最后一刻才能展现真正的力量。
-            
-            🎯 你的神圣武器：
-            - **复仇之枪**：{self.hunter_can_shoot and "🔫 已装弹 - 死亡时可以带走一个敌人" or "🚫 已失效 - 无法再使用"}
-            - **威慑力量**：你的存在让狼人投鼠忌器，不敢轻易动手
-            - **最后审判**：在生命的最后时刻，你将成为正义的执行者
-            
-            🎭 你的隐秘使命：
-            - **完美潜伏**：绝不能让任何人知道你是猎人，包括好人
-            - **冷静观察**：默默分析每个人的行为，寻找真正的敌人
-            - **时机等待**：耐心等待最佳时机，一击必中
-            - **价值最大化**：确保你的枪能够带走最有价值的目标
-            
-            💡 你的生存哲学：
-            1. **隐忍为上**：越是关键时刻，越要保持低调
-            2. **观察入微**：每个人的一举一动都可能是线索
-            3. **价值判断**：如果必须死亡，要确保带走最重要的敌人
-            4. **团队意识**：你的枪不是为了复仇，而是为了正义
-            5. **策略思维**：有时候威慑比实际开枪更有价值
-            
-            🌟 你的发言风格：
-            - 低调而理性，不引人注目
-            - 善于分析但不过分表现
-            - 关键时刻能够挺身而出
-            - 死亡时要做出最明智的选择
-            """
-        elif self.role == Role.VILLAGER:
-            base_prompt += f"""
-            
-            🏘️ 你是村庄的普通居民，但绝不普通的智者
-            
-            你是村民，虽然没有神奇的能力，但你拥有最珍贵的武器——纯粹的逻辑思维和敏锐的观察力。
-            你是村庄的基石，是正义的化身，是狼人最害怕的存在。
-            
-            🧠 你的智慧武器：
-            - **逻辑推理**：你能从蛛丝马迹中发现真相，从矛盾中找到破绽
-            - **行为分析**：你善于观察每个人的言行举止，判断其真实动机
-            - **信息整合**：你能将零散的信息拼凑成完整的真相拼图
-            - **直觉洞察**：有时候，你的第六感比任何神职能力都准确
-            
-            🎯 你的使命宣言：
-            - **真相的追求者**：永远站在真理这一边，不被谎言迷惑
-            - **正义的执行者**：用你的投票为村庄带来光明
-            - **智慧的传播者**：通过你的发言启发其他好人
-            - **希望的守护者**：即使在最黑暗的时刻也不放弃
-            
-            💡 你的生存智慧：
-            1. **相信神职**：预言家的查杀是最可靠的信息，要坚定支持
-            2. **观察细节**：注意谁在为被查杀的人辩护，这些人很可疑
-            3. **逻辑至上**：分析每个人的发言是否符合其身份逻辑
-            4. **团结一致**：与其他好人站在一起，共同对抗黑暗势力
-            5. **勇敢发声**：不要害怕表达你的观点，真理需要勇敢的声音
-            
-            🌟 你的发言风格：
-            - 理性而坚定，基于事实说话
-            - 善于提出关键问题，引导讨论方向
-            - 支持神职玩家，但也会独立思考
-            - 面对狼人的诡辩时毫不妥协
-            - 用朴实的语言说出最深刻的道理
-            """
-        
-        return base_prompt
+            return f"""角色能力：死亡时可以开枪带走一名玩家
+当前状态：开枪能力{shoot_status}
+
+行为规则：
+1. 平时要保持低调，不暴露猎人身份
+2. 死亡时可以选择开枪带走一名玩家
+3. 白天发言要像普通村民一样
+4. 开枪目标应该选择最可疑的狼人
+
+生存策略：
+- 隐藏身份，避免成为狼人优先目标
+- 观察分析，为可能的开枪做准备
+- 威慑作用有时比实际开枪更重要"""
+
+        elif self.role == Role.WEREWOLF:
+            return """角色能力：夜晚与狼队友商议击杀目标
+阵营目标：消灭好人，隐藏身份
+
+行为规则：
+1. 白天必须伪装成好人
+2. 可以适当时候假跳神职身份（需要策略考虑）
+3. 与狼队友配合，但必要时可以切割队友
+4. 分析神职玩家的行为，优先击杀威胁
+
+伪装策略：
+- 表现出寻找狼人的积极态度
+- 可以质疑预言家，但不要过于明显
+- 队友被查杀时，评估是否需要弃车保帅
+- 投票时要表现出好人的思维逻辑"""
+
+        else:
+            return "请按照你的角色进行游戏。"
     
     def _build_full_prompt(self, prompt: str, context: Dict[str, Any] = None) -> str:
         """Build the full prompt with context"""
@@ -848,7 +1147,10 @@ TARGET:
         return {"action": "none"}
     
     def speak(self, context: Dict[str, Any]) -> str:
-        """Generate speech for day discussion with strict speaking order enforcement"""
+        """Generate speech for day discussion with reality constraint validation"""
+        
+        # Initialize reality constraint validator
+        validator = RealityConstraintValidator(self.game_state if hasattr(self, 'game_state') else None)
         
         # Get speaking order information from day context
         players_before = [p["name"] for p in context.get("players_before_me", [])]
@@ -1008,22 +1310,230 @@ SPEECH: 我是第{my_position}个发言，我是{self.name}，我的编号是{se
 请开始你的发言："""
         
         response = self.send_message(prompt, context)
-        # print(f"🗣️ {self.name}({self.id}) 的发言：{response}")  # 移除重复打印
         
         # Extract only the SPEECH content
+        initial_speech = ""
         try:
             lines = response.strip().split('\n')
             for line in lines:
                 line = line.strip()
                 if line.startswith('SPEECH:'):
-                    speech = line.split(':', 1)[1].strip()
-                    return speech
+                    initial_speech = line.split(':', 1)[1].strip()
+                    break
             
-            # If no SPEECH tag found, return the full response
-            return response
-            
+            # If no SPEECH tag found, use the full response
+            if not initial_speech:
+                initial_speech = response
+                
         except:
-            return response
+            initial_speech = response
+        
+        # Validate speech content using reality constraint validator
+        validation_result = validator.validate_speech_content(
+            self.id, 
+            self.role, 
+            initial_speech, 
+            context
+        )
+        
+        # Log speech quality and hallucination detection
+        quality_score = self._evaluate_speech_quality(initial_speech, validation_result, context)
+        self._log_speech_quality(initial_speech, validation_result, quality_score, context)
+        
+        if not validation_result["is_valid"]:
+            print(f"🚨 检测到幻觉内容 - {self.name}({self.id}): {validation_result['issues']}")
+            
+            # Log hallucination detection
+            self._log_hallucination_detection(initial_speech, validation_result, context)
+            
+            # Use corrected speech
+            corrected_speech = validation_result["corrected_speech"]
+            print(f"✅ 修正后发言 - {self.name}({self.id}): {corrected_speech}")
+            
+            # Log correction history
+            self._log_correction_history(initial_speech, corrected_speech, validation_result["issues"], context)
+            
+            return corrected_speech
+        
+        return initial_speech
+    
+    def _evaluate_speech_quality(self, speech: str, validation_result: Dict[str, Any], context: Dict[str, Any] = None) -> float:
+        """评估发言质量，返回0-1之间的分数"""
+        score = 1.0
+        
+        # 基于幻觉检测结果扣分
+        if not validation_result["is_valid"]:
+            issue_count = len(validation_result["issues"])
+            score -= min(0.5, issue_count * 0.1)  # 每个问题扣0.1分，最多扣0.5分
+        
+        # 基于发言长度评估
+        if len(speech) < 20:
+            score -= 0.2  # 发言过短扣分
+        elif len(speech) > 500:
+            score -= 0.1  # 发言过长轻微扣分
+        
+        # 基于第一轮特殊要求评估
+        if context and context.get("round", 1) == 1:
+            if "我是第" not in speech:
+                score -= 0.1  # 第一轮未明确发言顺序
+        
+        return max(0.0, score)
+    
+    def _log_speech_quality(self, speech: str, validation_result: Dict[str, Any], quality_score: float, context: Dict[str, Any] = None):
+        """记录发言质量日志"""
+        quality_log = {
+            "timestamp": "current",
+            "round": context.get("round", 1) if context else 1,
+            "player_id": self.id,
+            "player_name": self.name,
+            "speech": speech,
+            "quality_score": quality_score,
+            "is_valid": validation_result["is_valid"],
+            "issues_count": len(validation_result["issues"]),
+            "speech_length": len(speech)
+        }
+        
+        self.speech_quality_log.append(quality_log)
+    
+    def _log_hallucination_detection(self, speech: str, validation_result: Dict[str, Any], context: Dict[str, Any] = None):
+        """记录幻觉检测日志"""
+        hallucination_log = {
+            "timestamp": "current",
+            "round": context.get("round", 1) if context else 1,
+            "player_id": self.id,
+            "player_name": self.name,
+            "original_speech": speech,
+            "issues": validation_result["issues"],
+            "issue_types": self._categorize_issues(validation_result["issues"]),
+            "severity": "high" if len(validation_result["issues"]) > 2 else "medium" if len(validation_result["issues"]) > 0 else "low"
+        }
+        
+        self.hallucination_detection_log.append(hallucination_log)
+    
+    def _log_correction_history(self, original_speech: str, corrected_speech: str, issues: List[str], context: Dict[str, Any] = None):
+        """记录修正历史日志"""
+        correction_log = {
+            "timestamp": "current",
+            "round": context.get("round", 1) if context else 1,
+            "player_id": self.id,
+            "player_name": self.name,
+            "original_speech": original_speech,
+            "corrected_speech": corrected_speech,
+            "issues_fixed": issues,
+            "correction_effectiveness": self._evaluate_correction_effectiveness(original_speech, corrected_speech)
+        }
+        
+        self.correction_history.append(correction_log)
+    
+    def _categorize_issues(self, issues: List[str]) -> Dict[str, int]:
+        """将问题分类统计"""
+        categories = {
+            "identity_hallucination": 0,
+            "temporal_hallucination": 0,
+            "event_hallucination": 0,
+            "other": 0
+        }
+        
+        for issue in issues:
+            if "不应声称" in issue or "查验结果" in issue:
+                categories["identity_hallucination"] += 1
+            elif "第一轮不应引用" in issue:
+                categories["temporal_hallucination"] += 1
+            elif "私下互动" in issue:
+                categories["event_hallucination"] += 1
+            else:
+                categories["other"] += 1
+        
+        return categories
+    
+    def _evaluate_correction_effectiveness(self, original: str, corrected: str) -> float:
+        """评估修正效果，返回0-1之间的分数"""
+        if len(corrected) == 0:
+            return 0.0
+        
+        # 简单的修正效果评估
+        length_ratio = len(corrected) / len(original) if len(original) > 0 else 0
+        
+        # 如果修正后的内容太短，可能过度修正了
+        if length_ratio < 0.3:
+            return 0.5
+        elif length_ratio > 0.8:
+            return 0.9
+        else:
+            return 0.7
+    
+    def get_speech_quality_report(self) -> Dict[str, Any]:
+        """获取发言质量报告"""
+        if not self.speech_quality_log:
+            return {"message": "暂无发言质量数据"}
+        
+        total_speeches = len(self.speech_quality_log)
+        avg_quality = sum(log["quality_score"] for log in self.speech_quality_log) / total_speeches
+        valid_speeches = sum(1 for log in self.speech_quality_log if log["is_valid"])
+        
+        return {
+            "player_id": self.id,
+            "player_name": self.name,
+            "total_speeches": total_speeches,
+            "average_quality_score": round(avg_quality, 2),
+            "valid_speech_rate": round(valid_speeches / total_speeches, 2),
+            "hallucination_incidents": len(self.hallucination_detection_log),
+            "corrections_applied": len(self.correction_history)
+        }
+    
+    def _build_constrained_prompt(self, context: Dict[str, Any] = None) -> str:
+        """构建带有约束的提示词"""
+        base_prompt = "请基于当前游戏状态进行发言。"
+        
+        if context:
+            # 添加现实约束信息
+            if "reality_constraints" in context:
+                constraints = context["reality_constraints"]
+                base_prompt += f"\n\n=== 现实约束 ==="
+                base_prompt += f"\n当前轮次：第{constraints.get('current_round', 1)}轮"
+                
+                if constraints.get("is_first_round"):
+                    base_prompt += f"\n⚠️ 第一轮特别提醒：没有前夜信息可供分析"
+                
+                available_info = constraints.get("available_information", [])
+                base_prompt += f"\n可用信息：{', '.join(available_info)}"
+                
+                forbidden_claims = constraints.get("forbidden_claims", [])
+                if forbidden_claims:
+                    base_prompt += f"\n禁止声称身份：{', '.join(forbidden_claims)}"
+                
+                disclaimers = constraints.get("required_disclaimers", [])
+                if disclaimers:
+                    base_prompt += f"\n重要约束："
+                    for disclaimer in disclaimers:
+                        base_prompt += f"\n- {disclaimer}"
+        
+        return base_prompt
+    
+    def _validate_speech_reality(self, speech: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """验证发言内容的现实性（简化版本，主要依赖RealityConstraintValidator）"""
+        validator = RealityConstraintValidator()
+        return validator.validate_speech_content(self.id, self.role, speech, context)
+    
+    def _regenerate_speech_with_constraints(self, original_speech: str, issues: List[str], context: Dict[str, Any] = None) -> str:
+        """基于约束重新生成发言"""
+        # 构建修正提示
+        correction_prompt = f"""你的原始发言存在以下问题：
+{chr(10).join(f'- {issue}' for issue in issues)}
+
+原始发言：{original_speech}
+
+请重新生成一个符合游戏规则的发言，避免上述问题。
+
+修正后的发言："""
+        
+        try:
+            corrected_response = self.send_message(correction_prompt, context)
+            return corrected_response.strip()
+        except:
+            # 如果重新生成失败，使用自动修正的版本
+            validator = RealityConstraintValidator()
+            return validator._generate_corrected_speech(original_speech, issues, self.role, context)
     
     def get_conversation_history(self) -> List[Dict[str, str]]:
         """Get the conversation history for logging"""

@@ -172,6 +172,27 @@ class DayPhase:
                     "last_words_note": f"请重点关注死亡玩家的遗言信息，这是重要的游戏线索" if has_last_words else None
                 }
                 
+                # Add first round special constraints
+                if self.game_state.current_round == 1:
+                    context["first_round_constraints"] = {
+                        "is_game_start": True,
+                        "no_previous_interactions": True,
+                        "limited_information": True,
+                        "focus_on_basics": True,
+                        "available_info": [
+                            "夜晚死亡公告",
+                            "死亡玩家遗言（如果有）",
+                            "玩家列表和基本信息"
+                        ],
+                        "forbidden_topics": [
+                            "前夜查验结果",
+                            "复杂的玩家互动分析",
+                            "历史行为模式",
+                            "投票历史"
+                        ],
+                        "recommended_approach": "基于基础逻辑和遗言信息进行简单推理"
+                    }
+                
                 # Enhanced last words information for LLM-friendly format
                 if hasattr(self.game_state, 'last_words_context') and self.game_state.last_words_context:
                     formatted_last_words = []
