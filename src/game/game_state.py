@@ -339,8 +339,9 @@ class GameState:
         
         # Enhanced last words processing with validation and formatting
         last_words_info = []
+        last_word_print = 0
         if hasattr(self, 'last_words_context') and self.last_words_context:
-            # print(f"🔍 DEBUG: 处理遗言信息 - 共 {len(self.last_words_context)} 条遗言")
+            print(f"🔍 DEBUG: 处理遗言信息 - 共 {len(self.last_words_context)} 条遗言")
             
             for last_word in self.last_words_context:
                 # Validate last word entry
@@ -354,6 +355,9 @@ class GameState:
                         "is_last_words": True
                     }
                     last_words_info.append(formatted_last_word)
+                    last_word_print += 1
+                    if last_word_print == 1:
+                        print(f"😒遗言 - {last_word['name']}({last_word['player']}): {last_word['speech']}")
                     # print(f"🔍 DEBUG: 添加遗言 - {last_word['name']}({last_word['player']}): {last_word['speech'][:50]}...")
                 else:
                     print(f"🔍 DEBUG: 跳过无效遗言条目: {last_word}")
