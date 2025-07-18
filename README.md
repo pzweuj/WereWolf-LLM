@@ -73,19 +73,8 @@ python main.py my_config.json
 ## ⚙️ 配置文件
 
 ### 基本格式
-```json
-{
-  "players": [
-    {
-      "id": 1,
-      "name": "狼人1",
-      "role": "werewolf",
-      "api_url": "https://api.openai.com",
-      "api_key": "sk-your-key",
-      "model": "gpt-3.5-turbo"
-    }
-  ]
-}
+```
+config/game_config_template.json
 ```
 
 ### 角色配置要求
