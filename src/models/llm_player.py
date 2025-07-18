@@ -63,33 +63,28 @@ class LLMPlayer(Player):
     def _build_system_prompt(self) -> str:
         """Build the system prompt based on player's role and current state"""
         base_prompt = f"""
-        你正在玩狼人杀游戏。
-        你的编号是：{self.id}
-        你的名字是：{self.name}
-        你的身份是：{self.get_role_description()}
-        你属于{self.team.value}阵营。
-        你当前状态：{"存活" if self.is_alive() else "已死亡"}
+        你是一名经验丰富的狼人杀玩家，具备良好的逻辑推理能力和游戏策略意识。
         
-        严格规则：
-        1. 发言顺序：严格按照玩家编号从小到大发言
-        2. 逻辑限制：只能分析已经发言的玩家，不能假设或引用未发言玩家的观点
-        3. 发言内容：基于当前信息做推理，不能编造未发生的对话或行为
-        4. 后置位意识：如果你是后置位发言，只能分析前面玩家的发言，不能预判后面玩家的发言
+        你的身份信息：
+        - 编号：{self.id}
+        - 名字：{self.name}
+        - 身份：{self.get_role_description()}
+        - 阵营：{self.team.value}
+        - 状态：{"存活" if self.is_alive() else "已死亡"}
         
-        游戏规则：
-        1. 狼人阵营：每晚可以杀人，目标是消灭所有神职和村民
-        2. 预言家：每晚可以查验一名玩家的身份
-        3. 女巫：有解药和毒药各一瓶，不能同时使用
-        4. 猎人：死亡时可以开枪带走一名玩家
-        5. 村民：无特殊技能，通过推理找出狼人
+        核心游戏策略原则：
+        1. 信息价值：预言家的查杀信息是最可靠的，除非有明确的对跳情况
+        2. 逻辑一致性：分析玩家发言的逻辑是否自洽，是否符合其声称的身份
+        3. 行为分析：观察玩家的投票行为、发言态度是否符合好人思维
+        4. 阵营判断：优先相信已验证的神职玩家，警惕可疑行为
         
-        你的目标：{"消灭所有好人" if self.team.value == "werewolf" else "找出并消灭所有狼人"}
+        关键判断标准：
+        - 如果有预言家报出查杀且无人对跳，应该高度相信查杀结果
+        - 如果有多人跳预言家，需要通过逻辑和行为判断真假
+        - 注意观察谁在为被查杀的玩家辩护，这些人可能是狼队友
+        - 分析发言的动机：好人发言是为了找狼，狼人发言是为了混淆视听
         
-        发言要求：
-        - 必须基于已发言玩家的内容进行分析
-        - 不能提及未发言玩家的观点或行为
-        - 使用"根据前面的发言"、"从已发言的玩家来看"等限定词
-        - 避免绝对判断，使用"可能"、"倾向于"等不确定表述
+        你的目标：{"帮助狼队获胜，隐藏身份并误导好人" if self.team.value == "werewolf" else "通过逻辑推理找出所有狼人"}
         """
         
         # Add role-specific instructions
@@ -97,10 +92,24 @@ class LLMPlayer(Player):
             base_prompt += f"""
             作为狼人，你可以和同伴交流，每晚要选择一名玩家击杀。
             注意隐藏身份，在白天发言时要假装是好人。
+            
+            狼人高级策略：
+            1. **队友保护策略**：适度为队友辩护，但不能过于明显
+            2. **弃车保帅策略**：当队友完全暴露且无法挽救时，果断切割保护自己
+            3. **票数分析**：时刻分析场上票数对比，评估是否需要牺牲队友
+            4. **身份伪装**：始终表现出好人思维，避免暴露狼人身份
+            
+            关键判断标准：
+            - 如果队友被预言家查杀且无法反驳，考虑是否需要切割
+            - 如果继续为队友辩护会暴露自己，果断放弃队友
+            - 如果狼队票数明显不足以救队友，选择保护自己和其他队友
+            - 分析场上局势，优先保证狼队整体利益
+            
             发言时特别注意：
             - 只能分析已发言玩家的内容
             - 不能假设未发言玩家的身份或行为
             - 避免狼人团队内部的明显暗示
+            - 必要时可以投票给暴露的队友以保护自己
             """
         elif self.role == Role.SEER:
             base_prompt += f"""
@@ -197,25 +206,42 @@ class LLMPlayer(Player):
         return full_prompt
     
     def vote_for_player(self, candidates: List[int], reason: str = None) -> int:
-        """Ask the LLM to vote for a player"""
+        """Ask the LLM to vote for a player with strategic analysis"""
         # Remove self from candidates if present
         safe_candidates = [c for c in candidates if c != self.id]
         if not safe_candidates:
-            safe_candidates = [c for c in candidates if c != self.id]
-            if not safe_candidates:
-                return candidates[0] if candidates else self.id
+            return candidates[0] if candidates else self.id
         
-        prompt = f"""请从以下玩家中选择一名进行投票淘汰（不能投票给自己）：
+        # Build strategic voting context
+        strategic_context = self._build_voting_context()
+        
+        prompt = f"""=== 投票阶段战略分析 ===
 
-可选玩家：{safe_candidates}
+{strategic_context}
+
+可选投票目标：{safe_candidates}
+
+=== 投票策略指导 ===
+作为{self.team.value}阵营，你需要基于以下原则投票：
+
+{"**狼人投票策略：**" if self.team.value == "werewolf" else "**好人投票策略：**"}
+{"- 避免投票给狼队友，优先投票给神职玩家" if self.team.value == "werewolf" else "- 优先相信预言家的查杀信息"}
+{"- 制造混乱，质疑预言家的可信度" if self.team.value == "werewolf" else "- 如果预言家报出查杀且无对跳，应该高度相信"}
+{"- 伪装成好人，表现出合理的推理逻辑" if self.team.value == "werewolf" else "- 分析发言逻辑，找出行为可疑的玩家"}
+
+=== 关键判断原则 ===
+1. **预言家查杀的可信度**：如果有预言家明确报出查杀，且无其他玩家对跳预言家，这个查杀信息极其可靠
+2. **发言逻辑分析**：观察玩家发言是否符合其声称的身份，是否有逻辑矛盾
+3. **行为动机分析**：好人发言是为了找狼，狼人发言是为了混淆视听
+4. **投票行为分析**：观察谁在为被查杀的玩家辩护，这些人可能是狼队友
 
 请严格按照以下格式回复：
 VOTE: [玩家ID]
-REASON: [投票原因，基于前面玩家的发言分析]
+REASON: [详细的投票理由，必须基于具体的游戏信息和策略分析]
 
 示例回复：
 VOTE: 3
-REASON: 根据玩家1和玩家2的发言，玩家3的逻辑存在矛盾，倾向于认为其是狼人
+REASON: 预言家明确查杀了玩家3，且无其他玩家对跳预言家，这个查杀信息可信度极高。玩家3在发言中试图质疑预言家，这种行为符合被查杀狼人的典型反应。
 """
         response = self.send_message(prompt)
         print(f"投票阶段 - {self.name}({self.id}) 的投票决策：{response}")
@@ -257,6 +283,39 @@ REASON: 根据玩家1和玩家2的发言，玩家3的逻辑存在矛盾，倾向
             return target
         
         return candidates[0] if candidates else self.id
+    
+    def _build_voting_context(self) -> str:
+        """Build strategic voting context based on game information"""
+        context_parts = []
+        
+        # Add seer check information if available
+        if self.role == Role.SEER and self.seer_checks:
+            context_parts.append("=== 预言家查验信息 ===")
+            for player_id, result in self.seer_checks.items():
+                context_parts.append(f"- 玩家{player_id}: {result}")
+        
+        # Add general strategic context
+        context_parts.append("=== 当前局面分析 ===")
+        context_parts.append("- 分析已发言玩家的逻辑一致性")
+        context_parts.append("- 观察是否有预言家跳出并报查杀")
+        context_parts.append("- 注意是否有玩家为被查杀者辩护")
+        context_parts.append("- 考虑发言动机：好人找狼 vs 狼人混淆")
+        
+        if self.team.value == "villager":
+            context_parts.append("\n=== 好人阵营重要提醒 ===")
+            context_parts.append("- 如果预言家明确查杀且无对跳，这是最可靠的信息")
+            context_parts.append("- 优先投票给被查杀的玩家")
+            context_parts.append("- 警惕为被查杀玩家辩护的人，可能是狼队友")
+        else:
+            context_parts.append("\n=== 狼人阵营高级策略 ===")
+            context_parts.append("- **弃车保帅判断**：如果队友被预言家查杀且无法反驳，评估是否需要切割")
+            context_parts.append("- **票数对比分析**：计算狼队vs好人的票数，如果明显处于劣势则考虑放弃队友")
+            context_parts.append("- **暴露风险评估**：如果继续为队友辩护会暴露自己，果断投票给队友")
+            context_parts.append("- **团队利益优先**：保护未暴露的队友比救一个暴露的队友更重要")
+            context_parts.append("- **伪装好人思维**：投票给暴露队友时要表现出'正义'的好人逻辑")
+            context_parts.append("- **避免过度辩护**：适度质疑预言家可以，但不要成为唯一为队友说话的人")
+        
+        return "\n".join(context_parts)
     
     def make_night_action(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """Handle night actions based on role"""
