@@ -246,7 +246,16 @@ class DayPhase:
                 context["voting_phase"] = True
                 context["candidates"] = candidate_ids
                 
-                voted_player = voter.vote_for_player(candidate_ids)
+                # Add all day speeches as context for voting
+                if hasattr(self.game_state, 'day_speeches') and self.game_state.current_round in self.game_state.day_speeches:
+                    all_speeches = self.game_state.day_speeches[self.game_state.current_round]
+                    context["all_day_speeches"] = all_speeches
+                
+                # Add last words context for voting decisions
+                if hasattr(self.game_state, 'last_words_context') and self.game_state.last_words_context:
+                    context["last_words_for_voting"] = self.game_state.last_words_context
+                
+                voted_player = voter.vote_for_player(candidate_ids, context=context)
                 
                 if voted_player in candidate_ids:
                     votes[voter.id] = voted_player

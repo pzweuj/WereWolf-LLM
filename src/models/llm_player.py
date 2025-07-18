@@ -71,7 +71,7 @@ class LLMPlayer(Player):
         - 编号：{self.id}
         - 姓名：{self.name}
         - 真实身份：{self.get_role_description()}
-        - 所属阵营：{self.team.value}
+        - 所属阵营：{self.team.value if hasattr(self.team, 'value') else self.team}
         - 生存状态：{"健在" if self.is_alive() else "已出局"}
         
         🧠 你的游戏哲学：
@@ -90,7 +90,7 @@ class LLMPlayer(Player):
         - 谁总是跟风投票？（可能是摸鱼的狼人）
         - 谁的逻辑过于完美？（可能是精心准备的谎言）
         
-        🎪 你的终极目标：{"作为黑暗势力的一员，你要隐藏真实身份，误导好人，帮助狼队统治这个村庄" if self.team.value == "werewolf" else "作为正义的守护者，你要用智慧和勇气揭露所有狼人，拯救村庄"}
+        🎪 你的终极目标：{"作为黑暗势力的一员，你要隐藏真实身份，误导好人，帮助狼队统治这个村庄" if (self.team.value if hasattr(self.team, 'value') else self.team) == "werewolf" else "作为正义的守护者，你要用智慧和勇气揭露所有狼人，拯救村庄"}
         """
         
         # Add role-specific instructions
@@ -291,7 +291,7 @@ class LLMPlayer(Player):
         
         return full_prompt
     
-    def vote_for_player(self, candidates: List[int], reason: str = None) -> int:
+    def vote_for_player(self, candidates: List[int], reason: str = None, context: Dict[str, Any] = None) -> int:
         """Ask the LLM to vote for a player with strategic analysis"""
         # Remove self from candidates if present
         safe_candidates = [c for c in candidates if c != self.id]
@@ -301,19 +301,39 @@ class LLMPlayer(Player):
         # Build strategic voting context
         strategic_context = self._build_voting_context()
         
+        # Add day speeches and last words to voting context
+        day_speeches_context = ""
+        if context and context.get("all_day_speeches"):
+            day_speeches_context = "\n\n=== 今日所有发言记录 ==="
+            for speech in context["all_day_speeches"]:
+                player_name = speech.get("name", f"玩家{speech.get('player', '?')}")
+                player_id = speech.get("player", "?")
+                speech_content = speech.get("speech", "")
+                day_speeches_context += f"\n• {player_name}({player_id}): {speech_content}"
+        
+        last_words_context = ""
+        if context and context.get("last_words_for_voting"):
+            last_words_context = "\n\n🔥🔥🔥 关键遗言信息（投票决策的重要依据）🔥🔥🔥"
+            for lw in context["last_words_for_voting"]:
+                player_name = lw.get("name", f"玩家{lw.get('player', '?')}")
+                player_id = lw.get("player", "?")
+                speech = lw.get("speech", "")
+                last_words_context += f"\n📢 死亡玩家{player_name}({player_id})的完整遗言：\n   「{speech}」"
+            last_words_context += "\n\n⚠️ 投票提醒：如果遗言中有预言家查杀信息，这是最可靠的投票依据！"
+        
         prompt = f"""=== 投票阶段战略分析 ===
 
-{strategic_context}
+{strategic_context}{day_speeches_context}{last_words_context}
 
 可选投票目标：{safe_candidates}
 
 === 投票策略指导 ===
-作为{self.team.value}阵营，你需要基于以下原则投票：
+作为{self.team.value if hasattr(self.team, 'value') else self.team}阵营，你需要基于以下原则投票：
 
-{"**狼人投票策略：**" if self.team.value == "werewolf" else "**好人投票策略：**"}
-{"- 避免投票给狼队友，优先投票给神职玩家" if self.team.value == "werewolf" else "- 优先相信预言家的查杀信息"}
-{"- 制造混乱，质疑预言家的可信度" if self.team.value == "werewolf" else "- 如果预言家报出查杀且无对跳，应该高度相信"}
-{"- 伪装成好人，表现出合理的推理逻辑" if self.team.value == "werewolf" else "- 分析发言逻辑，找出行为可疑的玩家"}
+{"**狼人投票策略：**" if (self.team.value if hasattr(self.team, 'value') else self.team) == "werewolf" else "**好人投票策略：**"}
+{"- 避免投票给狼队友，优先投票给神职玩家" if (self.team.value if hasattr(self.team, 'value') else self.team) == "werewolf" else "- 优先相信预言家的查杀信息"}
+{"- 制造混乱，质疑预言家的可信度" if (self.team.value if hasattr(self.team, 'value') else self.team) == "werewolf" else "- 如果预言家报出查杀且无对跳，应该高度相信"}
+{"- 伪装成好人，表现出合理的推理逻辑" if (self.team.value if hasattr(self.team, 'value') else self.team) == "werewolf" else "- 分析发言逻辑，找出行为可疑的玩家"}
 
 === 关键判断原则 ===
 1. **预言家查杀的可信度**：如果有预言家明确报出查杀，且无其他玩家对跳预言家，这个查杀信息极其可靠
@@ -330,7 +350,7 @@ VOTE: 3
 REASON: 预言家明确查杀了玩家3，且无其他玩家对跳预言家，这个查杀信息可信度极高。玩家3在发言中试图质疑预言家，这种行为符合被查杀狼人的典型反应。
 """
         response = self.send_message(prompt)
-        print(f"投票阶段 - {self.name}({self.id}) 的投票决策：{response}")
+        # print(f"投票阶段 - {self.name}({self.id}) 的投票决策：{response}")  # 简化投票输出
         
         try:
             # Parse structured response
@@ -387,7 +407,7 @@ REASON: 预言家明确查杀了玩家3，且无其他玩家对跳预言家，�
         context_parts.append("- 注意是否有玩家为被查杀者辩护")
         context_parts.append("- 考虑发言动机：好人找狼 vs 狼人混淆")
         
-        if self.team.value == "villager":
+        if self.team == "villager":
             context_parts.append("\n=== 好人阵营重要提醒 ===")
             context_parts.append("- 如果预言家明确查杀且无对跳，这是最可靠的信息")
             context_parts.append("- 优先投票给被查杀的玩家")
@@ -847,14 +867,15 @@ TARGET:
         last_words_info = ""
         last_words = context.get("last_words") or context.get("available_last_words", [])
         if last_words:
-            last_words_info = "\n\n🔥🔥🔥 重要遗言信息（必须重点关注和分析）🔥🔥🔥："
+            last_words_info = "\n\n🔥🔥🔥 重要遗言信息（必须仔细阅读，不要理解错误）🔥🔥🔥："
             for lw in last_words:
                 player_name = lw.get("name") or lw.get("player_name", f"玩家{lw.get('player', lw.get('player_id', '?'))}")
                 player_id = lw.get("player") or lw.get("player_id", "?")
                 speech = lw.get("speech") or lw.get("last_words", "")
-                last_words_info += f"\n📢 {player_name}({player_id})的遗言：{speech}"
-            last_words_info += "\n\n⚠️⚠️⚠️ 遗言信息是游戏中最重要的线索，你必须在发言中重点分析遗言内容！⚠️⚠️⚠️"
-            last_words_info += "\n💡 如果遗言中有预言家查杀信息，这通常是最可靠的线索！"
+                last_words_info += f"\n📢 死亡玩家{player_name}({player_id})的完整遗言内容：\n   「{speech}」"
+            last_words_info += "\n\n⚠️⚠️⚠️ 重要提醒：请仔细阅读遗言的具体内容，不要误解或编造遗言中没有的信息！⚠️⚠️⚠️"
+            last_words_info += "\n💡 如果遗言中提到查杀某个玩家，请准确记住是哪个玩家被查杀！"
+            last_words_info += "\n🚫 绝对不要说遗言中查杀了你自己，除非遗言明确提到你的编号！"
         
         # Role-specific speech constraints
         role_constraints = ""
@@ -928,10 +949,12 @@ SPEECH: [你的发言内容]
 1. **必须明确提及你是第几个发言**（例如："我是第{my_position}个发言"）
 2. **必须基于已发言玩家的内容**做分析
 3. **如果有遗言信息，必须重点分析遗言内容**
-4. **不能提及未发言玩家的任何信息**
-5. **不要分点描述，使用一句400字以内的话完成自己的发言**
-6. **使用逻辑推理而非主观猜测**
-7. **避免绝对判断，使用"可能"、"倾向于"等表述**
+4. **重要：不要混淆发言顺序和玩家编号！你是{self.name}({self.id})，第{my_position}个发言**
+5. **如果遗言提到查杀某个编号的玩家，请准确记住是哪个编号，不要与自己的编号混淆**
+6. **不能提及未发言玩家的任何信息**
+7. **不要分点描述，使用一句400字以内的话完成自己的发言**
+8. **使用逻辑推理而非主观猜测**
+9. **避免绝对判断，使用"可能"、"倾向于"等表述**
 
 示例发言：
 SPEECH: 我是第{my_position}个发言。根据前面张三的发言，我认为他的逻辑有些问题。他说自己是村民，但是对狼人行为的分析过于详细，这让我有些怀疑。不过这只是初步判断，还需要更多信息。
@@ -939,7 +962,7 @@ SPEECH: 我是第{my_position}个发言。根据前面张三的发言，我认�
 请开始你的发言："""
         
         response = self.send_message(prompt, context)
-        print(f"🗣️ {self.name}({self.id}) 的发言：{response}")
+        # print(f"🗣️ {self.name}({self.id}) 的发言：{response}")  # 移除重复打印
         
         # Extract only the SPEECH content
         try:
