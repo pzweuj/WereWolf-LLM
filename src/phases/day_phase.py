@@ -123,6 +123,14 @@ class DayPhase:
         speaking_order = self._get_speaking_order(night_deaths, alive_players)
         speaking_order_ids = [p.id for p in speaking_order]
         
+        # Debug: Print last words context availability
+        if hasattr(self.game_state, 'last_words_context') and self.game_state.last_words_context:
+            print(f"🔍 DEBUG: 白天讨论阶段 - 可用遗言信息: {len(self.game_state.last_words_context)} 条")
+            for lw in self.game_state.last_words_context:
+                print(f"🔍 DEBUG: 遗言 - {lw.get('name', 'Unknown')}({lw.get('player', 'N/A')}): {lw.get('speech', 'No speech')[:30]}...")
+        else:
+            print(f"🔍 DEBUG: 白天讨论阶段 - 无遗言信息")
+        
         for i, player in enumerate(speaking_order):
             if player.is_alive():
                 # Get day-specific context with speaking order
@@ -141,6 +149,24 @@ class DayPhase:
                     {"id": p.id, "name": p.name, "status": "alive" if p.is_alive() else "dead"}
                     for p in speaking_order[i+1:]
                 ]
+                
+                # Enhanced last words information for LLM-friendly format
+                if hasattr(self.game_state, 'last_words_context') and self.game_state.last_words_context:
+                    formatted_last_words = []
+                    for last_word in self.game_state.last_words_context:
+                        if self._validate_last_word_for_discussion(last_word):
+                            formatted_last_words.append({
+                                "player_id": last_word["player"],
+                                "player_name": last_word["name"],
+                                "last_words": last_word["speech"],
+                                "death_reason": last_word.get("death_reason", "夜晚死亡"),
+                                "round": last_word.get("round", self.game_state.current_round)
+                            })
+                    
+                    context["available_last_words"] = formatted_last_words
+                    context["last_words_summary"] = self._create_last_words_summary(formatted_last_words)
+                    
+                    print(f"🔍 DEBUG: 为玩家 {player.name}({player.id}) 提供 {len(formatted_last_words)} 条遗言信息")
                 
                 speech = player.speak(context)
                 
@@ -303,3 +329,42 @@ class DayPhase:
                     print(f"{player.name}({death_id}) 被淘汰")
         
         return deaths
+    
+    def _validate_last_word_for_discussion(self, last_word: Dict[str, Any]) -> bool:
+        """Validate last word entry for day discussion"""
+        required_fields = ["player", "name", "speech"]
+        
+        # Check if all required fields are present
+        for field in required_fields:
+            if field not in last_word:
+                return False
+        
+        # Check if values are valid
+        if (not isinstance(last_word["player"], int) or 
+            not isinstance(last_word["name"], str) or 
+            not isinstance(last_word["speech"], str)):
+            return False
+        
+        # Check if speech is not empty
+        if not last_word["speech"].strip():
+            return False
+        
+        return True
+    
+    def _create_last_words_summary(self, formatted_last_words: List[Dict[str, Any]]) -> str:
+        """Create a summary of last words for LLM context"""
+        if not formatted_last_words:
+            return "本轮无遗言信息。"
+        
+        summary_parts = []
+        summary_parts.append(f"本轮共有 {len(formatted_last_words)} 条遗言：")
+        
+        for i, last_word in enumerate(formatted_last_words, 1):
+            player_name = last_word["player_name"]
+            player_id = last_word["player_id"]
+            speech = last_word["last_words"]
+            death_reason = last_word.get("death_reason", "夜晚死亡")
+            
+            summary_parts.append(f"{i}. {player_name}({player_id}) - {death_reason}：{speech}")
+        
+        return "\n".join(summary_parts)

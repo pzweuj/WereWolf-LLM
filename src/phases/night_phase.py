@@ -273,21 +273,24 @@ class NightPhase:
         
         if action and action.get("action") == "heal":
             target = action.get("target")
-            # print(f"🔍 DEBUG: Witch heal - target: {target} (type: {type(target)}), wolf_kill_target: {self.game_state.wolf_kill_target} (type: {type(self.game_state.wolf_kill_target)})")
-            # print(f"🔍 DEBUG: Witch heal condition: {target} == {self.game_state.wolf_kill_target} -> {target == self.game_state.wolf_kill_target}")
-            # print(f"🔍 DEBUG: Witch potion available: {witch.witch_potions['heal']}")
-            # print(f"🔍 DEBUG: Witch object ID: {id(witch)}, witch_potions: {witch.witch_potions}")
             
-            # Convert target to int if it's a string
+            # 确保类型一致性和有效性检查
             try:
-                target_int = int(target)
-                wolf_target_int = int(self.game_state.wolf_kill_target)
+                target_int = int(target) if target is not None else None
+                wolf_target_int = int(self.game_state.wolf_kill_target) if self.game_state.wolf_kill_target is not None else None
                 
-                if target_int == wolf_target_int and witch.witch_potions["heal"]:
+                # 验证女巫是否可以使用解药
+                if (target_int is not None and 
+                    wolf_target_int is not None and 
+                    target_int == wolf_target_int and 
+                    witch.witch_potions["heal"]):
+                    
+                    # 立即更新状态，确保同步
                     witch.witch_potions["heal"] = False
                     self.game_state.witch_heal_used = True
                     
-                    print(f"🧙‍♀️ 女巫 {witch.name}({witch.id}) 使用解药救了 {target}")
+                    print(f"🧙‍♀️ 女巫 {witch.name}({witch.id}) 使用解药救了 {target_int}")
+                    print(f"🔍 DEBUG: 女巫解药状态已更新 - witch_heal_used: {self.game_state.witch_heal_used}")
                     
                     return {
                         "type": "witch_heal",
@@ -296,11 +299,10 @@ class NightPhase:
                         "action": "heal"
                     }
                 else:
-                    # print(f"🔍 DEBUG: Witch heal failed - target mismatch or potion used")
-                    pass
+                    print(f"🔍 DEBUG: 女巫解药使用失败 - target: {target_int}, wolf_target: {wolf_target_int}, potion_available: {witch.witch_potions['heal']}")
+                    
             except (ValueError, TypeError) as e:
-                # print(f"🔍 DEBUG: Witch heal failed - type conversion error: {e}")
-                pass
+                print(f"🔍 DEBUG: 女巫解药类型转换错误: {e}")
         
         elif action and action.get("action") == "poison":
             target = action.get("target")
@@ -369,37 +371,35 @@ class NightPhase:
         """Process all night actions and determine who dies"""
         deaths = []
         
-        # Debug: Print current state
-        # print(f"🔍 DEBUG: wolf_kill_target = {self.game_state.wolf_kill_target}")
-        # print(f"🔍 DEBUG: witch_heal_used = {self.game_state.witch_heal_used}")
+        # Debug: Print current state for troubleshooting
+        print(f"🔍 DEBUG: 处理夜晚行动 - wolf_kill_target = {self.game_state.wolf_kill_target}")
+        print(f"🔍 DEBUG: 处理夜晚行动 - witch_heal_used = {self.game_state.witch_heal_used}")
         
-        # Wolf kill (unless healed)
-        if self.game_state.wolf_kill_target and not self.game_state.witch_heal_used:
-            target_player = self.game_state.get_player_by_id(self.game_state.wolf_kill_target)
-            if target_player and target_player.is_alive():
-                deaths.append(self.game_state.wolf_kill_target)
-                # print(f"🔍 DEBUG: Adding wolf kill target {self.game_state.wolf_kill_target} to deaths")
-        elif self.game_state.wolf_kill_target and self.game_state.witch_heal_used:
-            pass
-            # print(f"🔍 DEBUG: Wolf kill target {self.game_state.wolf_kill_target} was healed by witch")
+        # Wolf kill (unless healed by witch)
+        if self.game_state.wolf_kill_target:
+            if not self.game_state.witch_heal_used:
+                target_player = self.game_state.get_player_by_id(self.game_state.wolf_kill_target)
+                if target_player and target_player.is_alive():
+                    deaths.append(self.game_state.wolf_kill_target)
+                    print(f"🔍 DEBUG: 狼人击杀生效 - 添加 {self.game_state.wolf_kill_target} 到死亡列表")
+            else:
+                target_player = self.game_state.get_player_by_id(self.game_state.wolf_kill_target)
+                if target_player:
+                    print(f"🔍 DEBUG: 狼人击杀被女巫解药阻止 - {target_player.name}({self.game_state.wolf_kill_target}) 被救")
         
         # Witch poison
-        # Need to check if witch used poison
         for event in self.night_events:
             if event["type"] == "witch_poison":
                 target = event["target"]
                 target_player = self.game_state.get_player_by_id(target)
                 if target_player and target_player.is_alive():
                     deaths.append(target)
-                    print(f"🔍 DEBUG: Adding witch poison target {target} to deaths")
+                    print(f"🔍 DEBUG: 女巫毒药生效 - 添加 {target} 到死亡列表")
         
         # Remove duplicates and sort
         deaths = list(set(deaths))
         deaths.sort()
         
-        if deaths:
-            print(f"夜晚死亡玩家：{deaths}")
-        else:
-            print("平安夜，无人死亡")
+        print(f"🔍 DEBUG: 最终夜晚死亡列表: {deaths}")
         
         return deaths

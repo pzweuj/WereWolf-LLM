@@ -334,16 +334,28 @@ class GameState:
                 "speech": f"[玩家{p.name}的发言]"
             })
         
-        # Include last words from night deaths
+        # Enhanced last words processing with validation and formatting
         last_words_info = []
-        if hasattr(self, 'last_words_context'):
+        if hasattr(self, 'last_words_context') and self.last_words_context:
+            print(f"🔍 DEBUG: 处理遗言信息 - 共 {len(self.last_words_context)} 条遗言")
+            
             for last_word in self.last_words_context:
-                last_words_info.append({
-                    "player": last_word["player"],
-                    "name": last_word["name"],
-                    "speech": last_word["speech"],
-                    "is_last_words": True
-                })
+                # Validate last word entry
+                if self._validate_last_word_entry(last_word):
+                    formatted_last_word = {
+                        "player": last_word["player"],
+                        "name": last_word["name"],
+                        "speech": last_word["speech"],
+                        "round": getattr(last_word, 'round', self.current_round),
+                        "death_reason": last_word.get("death_reason", "夜晚死亡"),
+                        "is_last_words": True
+                    }
+                    last_words_info.append(formatted_last_word)
+                    print(f"🔍 DEBUG: 添加遗言 - {last_word['name']}({last_word['player']}): {last_word['speech'][:50]}...")
+                else:
+                    print(f"🔍 DEBUG: 跳过无效遗言条目: {last_word}")
+        else:
+            print(f"🔍 DEBUG: 无遗言信息可用")
         
         # Include all players with their current status
         all_players_info = []
@@ -375,6 +387,57 @@ class GameState:
                 for p in players_remaining
             ]
         }
+    
+    def _validate_last_word_entry(self, last_word: Dict[str, Any]) -> bool:
+        """Validate last word entry format and content"""
+        required_fields = ["player", "name", "speech"]
+        
+        # Check if all required fields are present
+        for field in required_fields:
+            if field not in last_word:
+                print(f"🔍 DEBUG: 遗言验证失败 - 缺少字段: {field}")
+                return False
+        
+        # Check if player ID is valid
+        if not isinstance(last_word["player"], int) or last_word["player"] <= 0:
+            print(f"🔍 DEBUG: 遗言验证失败 - 无效玩家ID: {last_word['player']}")
+            return False
+        
+        # Check if name is not empty
+        if not last_word["name"] or not isinstance(last_word["name"], str):
+            print(f"🔍 DEBUG: 遗言验证失败 - 无效玩家姓名: {last_word['name']}")
+            return False
+        
+        # Check if speech is not empty
+        if not last_word["speech"] or not isinstance(last_word["speech"], str):
+            print(f"🔍 DEBUG: 遗言验证失败 - 无效遗言内容: {last_word['speech']}")
+            return False
+        
+        return True
+    
+    def add_last_words(self, player_id: int, speech: str, death_reason: str = "夜晚死亡") -> bool:
+        """Add last words to the context for day discussion"""
+        player = self.get_player_by_id(player_id)
+        if not player:
+            print(f"🔍 DEBUG: 添加遗言失败 - 找不到玩家: {player_id}")
+            return False
+        
+        last_word_entry = {
+            "player": player_id,
+            "name": player.name,
+            "speech": speech,
+            "round": self.current_round,
+            "death_reason": death_reason,
+            "is_last_words": True
+        }
+        
+        if self._validate_last_word_entry(last_word_entry):
+            self.last_words_context.append(last_word_entry)
+            print(f"🔍 DEBUG: 成功添加遗言 - {player.name}({player_id}): {speech[:50]}...")
+            return True
+        else:
+            print(f"🔍 DEBUG: 添加遗言失败 - 验证不通过")
+            return False
     
     def _get_basic_context(self, player: Player) -> Dict[str, Any]:
         """Basic context for general use"""

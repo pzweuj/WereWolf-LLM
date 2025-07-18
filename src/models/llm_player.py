@@ -662,14 +662,14 @@ TARGET:
             # print(f"🔍 DEBUG: Witch potion check - heal: {actual_has_heal}, poison: {actual_has_poison}")
             
             if action == "heal" and killed_player is not None and actual_has_heal:
-                print(f"✅ 女巫 {self.name}({self.id}) 使用解药救 {killed_player}")
-                self.witch_potions["heal"] = False
+                print(f"✅ 女巫 {self.name}({self.id}) 决定使用解药救 {killed_player}")
+                # 不在这里修改状态，让night_phase.py统一处理
                 return {"action": "heal", "target": killed_player}
             elif action == "poison" and target and actual_has_poison:
                 target_in_list = any(t[0] == target for t in display_targets)
                 if target_in_list and target != self.id:
-                    print(f"✅ 女巫 {self.name}({self.id}) 使用毒药毒 {target}")
-                    self.witch_potions["poison"] = False
+                    print(f"✅ 女巫 {self.name}({self.id}) 决定使用毒药毒 {target}")
+                    # 不在这里修改状态，让night_phase.py统一处理
                     return {"action": "poison", "target": target}
             elif action == "none":
                 print(f"✅ 女巫 {self.name}({self.id}) 选择不使用药物")
