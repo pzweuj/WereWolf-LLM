@@ -37,6 +37,7 @@ class GameState:
         
         # Day context information
         self.last_words_context: List[Dict[str, Any]] = []
+        self.day_speeches: Dict[int, List[Dict[str, Any]]] = {}  # round -> [speech_records]
         
     def add_player(self, player: Player):
         """Add a player to the game"""
@@ -324,14 +325,16 @@ class GameState:
         players_who_spoke = [p for p in alive_sorted if p.id < player.id]
         players_remaining = [p for p in alive_sorted if p.id > player.id]
         
-        # Build public speech history (without revealing roles)
+        # Build public speech history with actual content (without revealing roles)
         speech_history = []
         for p in players_who_spoke:
+            # Get actual speech from current round's day speeches
+            actual_speech = self._get_player_speech_in_round(p.id, self.current_round)
             speech_history.append({
                 "id": p.id,
                 "name": p.name,
                 "status": "alive" if p.is_alive() else "dead",
-                "speech": f"[玩家{p.name}的发言]"
+                "speech": actual_speech if actual_speech else f"[玩家{p.name}尚未发言]"
             })
         
         # Enhanced last words processing with validation and formatting
@@ -367,10 +370,30 @@ class GameState:
                 "role_display": "未知"  # 白天阶段不暴露角色
             })
 
+        # Add clear round and phase information to prevent hallucinations
+        game_stage_info = {
+            "is_first_round": self.current_round == 1,
+            "round_number": self.current_round,
+            "phase_name": "白天讨论阶段",
+            "has_previous_night": self.current_round > 1,
+            "game_just_started": self.current_round == 1
+        }
+        
+        # Add explicit context about what information is available
+        available_info = {
+            "night_deaths_announced": True,
+            "last_words_available": len(last_words_info) > 0,
+            "previous_day_speeches": self.current_round > 1,
+            "seer_results_available": False,  # Players don't know seer results in public
+            "previous_voting_results": self.current_round > 1
+        }
+        
         return {
             "context_type": "day_public",
             "round": self.current_round,
             "phase": self.phase,
+            "game_stage": game_stage_info,
+            "available_information": available_info,
             "alive_players": [{"id": p.id, "name": p.name, "status": "alive"} for p in alive_players],
             "dead_players": [{"id": p.id, "name": p.name, "status": "dead"} for p in dead_players],
             "all_players": all_players_info,
@@ -385,7 +408,13 @@ class GameState:
             "players_after_me": [
                 {"id": p.id, "name": p.name, "status": "alive" if p.is_alive() else "dead"}
                 for p in players_remaining
-            ]
+            ],
+            "context_instructions": {
+                "reminder": "这是真实的游戏信息，请基于实际发生的事件进行推理",
+                "first_round_note": f"这是第一轮游戏，{'但有死亡玩家的遗言信息需要重点关注' if len(last_words_info) > 0 else '没有前夜的查验结果或互动'}" if self.current_round == 1 else None,
+                "speech_note": "发言历史包含实际发言内容，如显示'尚未发言'则该玩家确实未发言",
+                "last_words_emphasis": f"死亡玩家的遗言包含重要信息，请仔细分析" if len(last_words_info) > 0 else None
+            }
         }
     
     def _validate_last_word_entry(self, last_word: Dict[str, Any]) -> bool:
@@ -438,6 +467,38 @@ class GameState:
         else:
             print(f"🔍 DEBUG: 添加遗言失败 - 验证不通过")
             return False
+    
+    def _get_player_speech_in_round(self, player_id: int, round_num: int) -> Optional[str]:
+        """Get player's speech in a specific round"""
+        if round_num not in self.day_speeches:
+            return None
+        
+        for speech_record in self.day_speeches[round_num]:
+            if speech_record.get("player") == player_id:
+                return speech_record.get("speech")
+        
+        return None
+    
+    def record_day_speech(self, player_id: int, speech: str, speaking_order: int = 0) -> bool:
+        """Record a player's speech during day discussion"""
+        player = self.get_player_by_id(player_id)
+        if not player:
+            return False
+        
+        if self.current_round not in self.day_speeches:
+            self.day_speeches[self.current_round] = []
+        
+        speech_record = {
+            "player": player_id,
+            "name": player.name,
+            "speech": speech,
+            "speaking_order": speaking_order,
+            "round": self.current_round,
+            "phase": "day_discussion"
+        }
+        
+        self.day_speeches[self.current_round].append(speech_record)
+        return True
     
     def _get_basic_context(self, player: Player) -> Dict[str, Any]:
         """Basic context for general use"""

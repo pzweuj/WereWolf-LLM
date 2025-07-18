@@ -843,6 +843,19 @@ TARGET:
             speech_context.append(f"待发言玩家：{', '.join(players_after)}")
         speech_context.append(f"你的发言顺序：第{my_position}位")
         
+        # Add last words information if available
+        last_words_info = ""
+        last_words = context.get("last_words") or context.get("available_last_words", [])
+        if last_words:
+            last_words_info = "\n\n🔥🔥🔥 重要遗言信息（必须重点关注和分析）🔥🔥🔥："
+            for lw in last_words:
+                player_name = lw.get("name") or lw.get("player_name", f"玩家{lw.get('player', lw.get('player_id', '?'))}")
+                player_id = lw.get("player") or lw.get("player_id", "?")
+                speech = lw.get("speech") or lw.get("last_words", "")
+                last_words_info += f"\n📢 {player_name}({player_id})的遗言：{speech}"
+            last_words_info += "\n\n⚠️⚠️⚠️ 遗言信息是游戏中最重要的线索，你必须在发言中重点分析遗言内容！⚠️⚠️⚠️"
+            last_words_info += "\n💡 如果遗言中有预言家查杀信息，这通常是最可靠的线索！"
+        
         # Role-specific speech constraints
         role_constraints = ""
         if self.role == Role.WEREWOLF:
@@ -902,7 +915,7 @@ LAST_WORDS: 我是预言家，我查验了玩家3是狼人，玩家5是好人。
 
 === 当前发言环境 ===
 - 你是第{my_position}个发言的玩家
-{chr(10).join(f'- {item}' for item in speech_context)}
+{chr(10).join(f'- {item}' for item in speech_context)}{last_words_info}
 
 === 身份限制 ==={role_constraints}
 
@@ -914,10 +927,11 @@ SPEECH: [你的发言内容]
 发言内容要求：
 1. **必须明确提及你是第几个发言**（例如："我是第{my_position}个发言"）
 2. **必须基于已发言玩家的内容**做分析
-3. **不能提及未发言玩家的任何信息**
-4. **不要分点描述，使用一句400字以内的话完成自己的发言**
-5. **使用逻辑推理而非主观猜测**
-6. **避免绝对判断，使用"可能"、"倾向于"等表述"
+3. **如果有遗言信息，必须重点分析遗言内容**
+4. **不能提及未发言玩家的任何信息**
+5. **不要分点描述，使用一句400字以内的话完成自己的发言**
+6. **使用逻辑推理而非主观猜测**
+7. **避免绝对判断，使用"可能"、"倾向于"等表述**
 
 示例发言：
 SPEECH: 我是第{my_position}个发言。根据前面张三的发言，我认为他的逻辑有些问题。他说自己是村民，但是对狼人行为的分析过于详细，这让我有些怀疑。不过这只是初步判断，还需要更多信息。

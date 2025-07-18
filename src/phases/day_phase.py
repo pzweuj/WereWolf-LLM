@@ -152,6 +152,26 @@ class DayPhase:
                     for p in speaking_order[i+1:]
                 ]
                 
+                # Add explicit context about current game state to prevent hallucinations
+                context["current_situation"] = {
+                    "round": self.game_state.current_round,
+                    "phase": "白天讨论阶段",
+                    "is_first_round": self.game_state.current_round == 1,
+                    "my_speaking_position": i + 1,
+                    "total_speakers": len(speaking_order),
+                    "players_who_spoke_before_me": i,
+                    "players_to_speak_after_me": len(speaking_order) - i - 1
+                }
+                
+                # Add clear instructions to prevent hallucinations
+                has_last_words = hasattr(self.game_state, 'last_words_context') and self.game_state.last_words_context
+                context["speaking_instructions"] = {
+                    "reminder": "请基于实际发生的游戏事件进行发言，不要编造不存在的互动",
+                    "first_round_reminder": f"这是第一轮游戏，{'但有死亡玩家的遗言信息' if has_last_words else '没有前夜的查验结果或玩家互动'}" if self.game_state.current_round == 1 else None,
+                    "speech_history_note": "发言历史中的内容是真实的，如果显示某玩家'尚未发言'，则该玩家确实还未发言",
+                    "last_words_note": f"请重点关注死亡玩家的遗言信息，这是重要的游戏线索" if has_last_words else None
+                }
+                
                 # Enhanced last words information for LLM-friendly format
                 if hasattr(self.game_state, 'last_words_context') and self.game_state.last_words_context:
                     formatted_last_words = []
@@ -172,6 +192,9 @@ class DayPhase:
                 
                 speech = player.speak(context)
                 
+                # Record the speech in game state for future reference
+                self.game_state.record_day_speech(player.id, speech, i + 1)
+                
                 discussion.append({
                     "player": player.id,
                     "name": player.name,
@@ -180,7 +203,7 @@ class DayPhase:
                     "speaking_order": i + 1
                 })
                 
-                # print(f"[{i+1}/{len(speaking_order)}] {player.name}：{speech}")
+                print(f"🗣️ {player.name}({player.id}) 的发言：{speech}")
         
         return discussion
     
