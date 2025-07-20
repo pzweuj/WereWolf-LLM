@@ -399,7 +399,7 @@ class LLMPlayer(Player):
             self.context_builder = EnhancedContextBuilder(self.hallucination_config)
         
     def send_message(self, prompt: str, context: Dict[str, Any] = None) -> str:
-        """Send a message to the LLM and get response"""
+        """Send a message to the LLM and get response with hallucination detection"""
         try:
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
@@ -416,11 +416,11 @@ class LLMPlayer(Player):
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": full_prompt}
                 ],
-                "temperature": 0.9,  # 提高温度以增加创造性和多样性
-                "max_tokens": 12288,  # 增加token限制以支持更长的推理
-                "top_p": 0.95,  # 添加top_p参数以平衡创造性和连贯性
-                "frequency_penalty": 0.3,  # 减少重复表达
-                "presence_penalty": 0.2   # 鼓励新颖的表达方式
+                "temperature": 0.7,  # 降低温度以减少幻觉
+                "max_tokens": 8192,  # 适中的token限制
+                "top_p": 0.9,  # 更保守的top_p设置
+                "frequency_penalty": 0.1,  # 轻微减少重复
+                "presence_penalty": 0.1   # 轻微鼓励新颖表达
             }
             
             response = requests.post(
@@ -434,47 +434,247 @@ class LLMPlayer(Player):
                 result = response.json()
                 llm_response = result["choices"][0]["message"]["content"]
                 
+                # 应用幻觉检测和修正
+                corrected_response = self._apply_hallucination_correction(llm_response, context)
+                
                 # Log the conversation
                 self.conversation_history.append({
                     "prompt": prompt,
                     "context": context,
-                    "response": llm_response,
+                    "original_response": llm_response,
+                    "corrected_response": corrected_response,
                     "timestamp": "current"
                 })
                 
-                return llm_response
+                return corrected_response
             else:
                 return f"Error: API returned status {response.status_code}"
                 
         except Exception as e:
             return f"Error communicating with LLM: {str(e)}"
     
+    def _apply_hallucination_correction(self, response: str, context: Dict[str, Any] = None) -> str:
+        """应用幻觉检测和修正"""
+        try:
+            # 使用内置的幻觉检测器
+            detector = HallucinationDetector()
+            
+            # 检测身份相关幻觉
+            identity_issues = detector.detect_identity_hallucination(response, self.role)
+            
+            # 检测时间线相关幻觉
+            current_round = context.get("game_state", {}).get("round", 1) if context else 1
+            temporal_issues = detector.detect_temporal_hallucination(response, current_round)
+            
+            # 检测事件相关幻觉
+            event_issues = detector.detect_event_hallucination(response, context)
+            
+            # 如果发现幻觉，应用修正
+            all_issues = identity_issues + temporal_issues + event_issues
+            if all_issues:
+                print(f"🚨 Legacy detection - {self.name}({self.id}): {all_issues}")
+                
+                corrector = SpeechCorrector()
+                corrected = corrector.apply_comprehensive_correction(response, all_issues, self.role, context)
+                
+                print(f"✅ Legacy correction - {self.name}({self.id}): {corrected}")
+                return corrected
+            
+            return response
+            
+        except Exception as e:
+            print(f"⚠️ Hallucination correction failed for {self.name}({self.id}): {str(e)}")
+            return response
+    
     def _build_system_prompt(self) -> str:
-        """构建简洁明确的系统提示词，避免复杂角色扮演"""
-        # 基础身份信息（简洁版）
-        base_info = f"""你是狼人杀游戏中的玩家{self.name}（编号{self.id}）。
+        """构建清晰的系统提示词，严格防止幻觉"""
+        
+        # 核心身份信息
+        identity_info = f"""=== 你的身份信息 ===
+玩家编号：{self.id}
+玩家姓名：{self.name}
+真实身份：{self.get_role_description()}
+所属阵营：{self.team.value if hasattr(self.team, 'value') else self.team}
+生存状态：{"存活" if self.is_alive() else "死亡"}
 
-身份信息：
-- 真实身份：{self.get_role_description()}
-- 所属阵营：{self.team.value if hasattr(self.team, 'value') else self.team}
-- 生存状态：{"存活" if self.is_alive() else "死亡"}
-
-游戏目标：
+=== 游戏目标 ===
 {self._get_simple_objective()}
+"""
 
-重要约束：
-1. 只能基于真实发生的游戏事件进行推理和发言
-2. 不能编造不存在的玩家互动、发言内容或游戏事件
-3. 身份声明必须符合游戏规则和你的真实身份
-4. 第一轮游戏时没有前夜信息，不能引用不存在的历史互动
-5. 发言要实事求是，基于当前已知的确切信息
+        # 严格的现实约束
+        reality_constraints = """
+=== 严格现实约束（违反将导致失败）===
+🚨 绝对禁止的行为：
+1. 编造任何不存在的玩家发言或互动
+2. 声称拥有你真实身份以外的能力
+3. 编造查验结果、用药记录或其他虚假信息
+4. 引用不存在的历史事件或轮次信息
+5. 混淆其他玩家的身份或发言内容
 
+✅ 必须遵守的原则：
+1. 只能基于明确提供的游戏信息进行推理
+2. 发言必须符合你的真实身份和能力
+3. 所有推理必须基于已发生的确切事件
+4. 不确定的信息必须明确标注为"不确定"或"推测"
+5. 严格区分事实和推测，不能将推测当作事实
+"""
+
+        # 角色特定指令
+        role_instructions = self._get_enhanced_role_instructions()
+        
+        # 发言格式要求
+        speech_format = """
+=== 发言格式要求 ===
+你的每次发言必须：
+1. 明确表明你的玩家编号和姓名
+2. 基于已知事实进行分析
+3. 清楚区分事实陈述和个人推测
+4. 避免使用绝对化的表述
+5. 保持逻辑清晰和前后一致
 """
         
-        # 角色特定指令（简化版）
-        role_instructions = self._get_role_specific_instructions()
-        
-        return base_info + role_instructions
+        return identity_info + reality_constraints + role_instructions + speech_format
+    
+    def _get_enhanced_role_instructions(self) -> str:
+        """获取增强的角色特定指令，严格防止幻觉"""
+        if self.role == Role.VILLAGER:
+            return """
+=== 村民角色指令 ===
+🎯 你的能力：无特殊能力，只能通过逻辑推理
+🎯 你的目标：找出并投票淘汰所有狼人
+
+✅ 允许的行为：
+- 分析其他玩家的发言逻辑
+- 相信预言家的查验结果
+- 支持真正的神职玩家
+- 基于事实进行推理和投票
+
+❌ 严格禁止的行为：
+- 声称自己是预言家、女巫或猎人
+- 编造查验结果或特殊信息
+- 声称拥有任何特殊能力
+- 编造与其他玩家的私下互动
+
+🔍 发言重点：
+- 基于已知事实进行逻辑分析
+- 支持已证明身份的预言家
+- 质疑可疑玩家的发言矛盾
+"""
+
+        elif self.role == Role.SEER:
+            return f"""
+=== 预言家角色指令 ===
+🎯 你的能力：每晚可以查验一名玩家的身份
+🎯 你的目标：通过查验结果指导好人阵营
+
+📊 当前查验记录：{self.seer_checks}
+
+✅ 允许的行为：
+- 公开或隐藏你的预言家身份
+- 报告真实的查验结果
+- 指导好人阵营的投票决策
+- 在遗言中公开所有查验结果
+
+❌ 严格禁止的行为：
+- 编造虚假的查验结果
+- 声称查验了实际未查验的玩家
+- 混淆查验结果的时间和对象
+
+🔍 发言策略：
+- 查到狼人时建议公开身份并报告查杀
+- 查到好人时可以选择性公开
+- 面对质疑时坚持查验结果的真实性
+- 死亡时必须在遗言中公开所有查验信息
+"""
+
+        elif self.role == Role.WITCH:
+            heal_status = "可用" if self.witch_potions.get("heal", False) else "已使用"
+            poison_status = "可用" if self.witch_potions.get("poison", False) else "已使用"
+            
+            return f"""
+=== 女巫角色指令 ===
+🎯 你的能力：拥有解药和毒药各一瓶
+🎯 你的目标：保护好人，毒杀狼人
+
+💊 当前药剂状态：
+- 解药：{heal_status}
+- 毒药：{poison_status}
+
+✅ 允许的行为：
+- 夜晚使用解药救人或毒药杀人
+- 白天伪装成普通村民
+- 基于预言家查验结果决定用药
+- 在关键时刻公开身份
+
+❌ 严格禁止的行为：
+- 过早暴露女巫身份
+- 编造用药记录或救人信息
+- 声称拥有查验能力
+- 编造与死亡玩家的互动
+
+🔍 发言策略：
+- 白天完全表现为普通村民
+- 不要暴露对夜晚事件的特殊了解
+- 支持预言家但不要过于明显
+- 保持身份隐秘直到必要时刻
+"""
+
+        elif self.role == Role.HUNTER:
+            shoot_status = "可用" if self.hunter_can_shoot else "已失效"
+            
+            return f"""
+=== 猎人角色指令 ===
+🎯 你的能力：死亡时可以开枪带走一名玩家
+🎯 你的目标：威慑狼人，关键时刻开枪
+
+🔫 当前状态：开枪能力{shoot_status}
+
+✅ 允许的行为：
+- 平时保持低调，隐藏猎人身份
+- 死亡时选择开枪目标
+- 白天表现为普通村民
+- 观察分析为开枪做准备
+
+❌ 严格禁止的行为：
+- 过早暴露猎人身份
+- 威胁其他玩家开枪
+- 编造开枪记录或能力
+- 声称拥有查验或用药能力
+
+🔍 发言策略：
+- 隐藏身份，避免成为狼人目标
+- 不要过于激进或引人注目
+- 威慑作用比实际开枪更重要
+- 开枪目标应选择最可疑的狼人
+"""
+
+        elif self.role == Role.WEREWOLF:
+            return """
+=== 狼人角色指令 ===
+🎯 你的能力：夜晚与狼队友商议击杀目标
+🎯 你的目标：消灭好人，隐藏身份
+
+✅ 允许的行为：
+- 白天伪装成好人
+- 适当时机假跳神职身份（需策略考虑）
+- 与狼队友配合但必要时切割
+- 质疑预言家的可信度
+
+❌ 严格禁止的行为：
+- 暴露自己的狼人身份
+- 过度为狼队友辩护
+- 编造查验结果（除非假跳预言家）
+- 暴露夜晚击杀的内部讨论
+
+🔍 伪装策略：
+- 表现出寻找狼人的积极态度
+- 可以质疑预言家但不要过于明显
+- 队友被查杀时评估是否弃车保帅
+- 投票时表现出好人的思维逻辑
+"""
+
+        else:
+            return "请按照你的角色进行游戏。"
     
     def _get_simple_objective(self) -> str:
         """获取简化的游戏目标描述"""
@@ -570,56 +770,129 @@ class LLMPlayer(Player):
             return "请按照你的角色进行游戏。"
     
     def _build_full_prompt(self, prompt: str, context: Dict[str, Any] = None) -> str:
-        """Build the full prompt with context"""
+        """构建完整的提示词，包含清晰的上下文信息"""
         full_prompt = prompt
         
         if context:
-            # Add speaking order context for day discussions
-            if "speaking_context" in context:
-                speaking = context["speaking_context"]
-                full_prompt += f"\n\n=== 发言顺序信息 ==="
-                full_prompt += f"\n- 你的发言顺序：第{speaking.get('my_position', 0)}位"
-                before_players = [f"{p['name']}({p['id']})" for p in speaking.get('players_before_me', [])]
-                after_players = [f"{p['name']}({p['id']})" for p in speaking.get('players_after_me', [])]
-                full_prompt += f"\n- 已发言玩家：{before_players or '无'}"
-                full_prompt += f"\n- 未发言玩家：{after_players or '无'}"
-                full_prompt += f"\n- 重要提醒：{speaking.get('strict_warning', '')}"
+            # 添加游戏状态信息
+            full_prompt += self._build_game_state_context(context)
             
-            full_prompt += f"\n\n🎯 当前游戏状态："
-            if "game_state" in context:
-                game_state = context["game_state"]
-                current_round = game_state.get('round', 0)
-                current_phase = game_state.get('phase', '未知')
-                full_prompt += f"\n- 📅 当前轮次：第{current_round}轮"
-                full_prompt += f"\n- 🕐 当前阶段：{current_phase}"
-                full_prompt += f"\n- ✅ 存活的玩家：{game_state.get('alive_players', [])}"
-                full_prompt += f"\n- ❌ 死亡的玩家：{game_state.get('dead_players', [])}"
-                
-                # 添加轮次提醒
-                if current_round == 1:
-                    full_prompt += f"\n- ⚠️ 第一轮提醒：这是游戏开始，没有历史信息可参考"
-                elif current_round == 2:
-                    full_prompt += f"\n- ⚠️ 第二轮提醒：可以参考第一轮的发言和投票结果"
-                else:
-                    full_prompt += f"\n- ⚠️ 第{current_round}轮提醒：可以参考前{current_round-1}轮的所有信息"
+            # 添加发言顺序信息
+            full_prompt += self._build_speaking_order_context(context)
             
-            if "night_events" in context:
-                night_events = context["night_events"]
-                full_prompt += f"\n- 昨夜事件：{night_events}"
+            # 添加历史发言记录
+            full_prompt += self._build_speech_history_context(context)
             
-            # Add strict speaking order rules for day phase
-            if context.get("game_state", {}).get("phase") == "day":
-                full_prompt += f"\n\n=== 发言规则提醒 ==="
-                full_prompt += f"\n⚠️ 严格规则："
-                full_prompt += f"\n1. 只能分析已经发言的玩家"
-                full_prompt += f"\n2. 不能提及未发言玩家的观点或行为"
-                full_prompt += f"\n3. 使用'根据前面发言'、'从已发言玩家来看'等限定词"
-                full_prompt += f"\n4. 避免绝对判断，使用'可能'、'倾向于'等表述"
+            # 添加夜晚事件信息
+            full_prompt += self._build_night_events_context(context)
             
-            if "discussion" in context:
-                full_prompt += f"\n- 当前讨论：{context['discussion']}"
+            # 添加特殊规则提醒
+            full_prompt += self._build_special_rules_context(context)
         
         return full_prompt
+    
+    def _build_game_state_context(self, context: Dict[str, Any]) -> str:
+        """构建游戏状态上下文"""
+        if "game_state" not in context:
+            return ""
+        
+        game_state = context["game_state"]
+        current_round = game_state.get('round', 0)
+        current_phase = game_state.get('phase', '未知')
+        
+        context_str = f"\n\n🎯 当前游戏状态："
+        context_str += f"\n- 📅 当前轮次：第{current_round}轮"
+        context_str += f"\n- 🕐 当前阶段：{current_phase}"
+        context_str += f"\n- ✅ 存活玩家：{game_state.get('alive_players', [])}"
+        context_str += f"\n- ❌ 死亡玩家：{game_state.get('dead_players', [])}"
+        
+        # 添加轮次特定提醒
+        if current_round == 1:
+            context_str += f"\n- ⚠️ 第一轮提醒：这是游戏开始，没有历史信息可参考"
+            context_str += f"\n- 🚫 禁止引用：前夜查验、历史互动、投票记录等不存在的信息"
+        elif current_round == 2:
+            context_str += f"\n- ⚠️ 第二轮提醒：可以参考第一轮的发言和投票结果"
+        else:
+            context_str += f"\n- ⚠️ 第{current_round}轮提醒：可以参考前{current_round-1}轮的所有信息"
+        
+        return context_str
+    
+    def _build_speaking_order_context(self, context: Dict[str, Any]) -> str:
+        """构建发言顺序上下文"""
+        if "speaking_context" not in context:
+            return ""
+        
+        speaking = context["speaking_context"]
+        context_str = f"\n\n=== 📢 发言顺序信息 ==="
+        context_str += f"\n- 你的发言顺序：第{speaking.get('my_position', 0)}位"
+        
+        before_players = [f"{p['name']}({p['id']})" for p in speaking.get('players_before_me', [])]
+        after_players = [f"{p['name']}({p['id']})" for p in speaking.get('players_after_me', [])]
+        
+        context_str += f"\n- 已发言玩家：{before_players or '无'}"
+        context_str += f"\n- 未发言玩家：{after_players or '无'}"
+        
+        if speaking.get('strict_warning'):
+            context_str += f"\n- ⚠️ 重要提醒：{speaking.get('strict_warning')}"
+        
+        return context_str
+    
+    def _build_speech_history_context(self, context: Dict[str, Any]) -> str:
+        """构建发言历史上下文"""
+        if not context.get("all_day_speeches"):
+            return ""
+        
+        context_str = f"\n\n=== 📝 本轮发言记录（按发言顺序）==="
+        context_str += f"\n⚠️ 重要：以下是所有玩家的真实发言，请严格基于这些内容进行分析"
+        
+        for i, speech in enumerate(context["all_day_speeches"], 1):
+            player_name = speech.get("name", f"玩家{speech.get('player', '?')}")
+            player_id = speech.get("player", "?")
+            speech_content = speech.get("speech", "")
+            speaking_order = speech.get("speaking_order", i)
+            
+            context_str += f"\n\n【第{speaking_order}位发言】{player_name}(编号{player_id})："
+            context_str += f"\n「{speech_content}」"
+        
+        context_str += f"\n\n⚠️ 分析约束：只能基于以上真实发言进行推理，不能编造任何不存在的内容"
+        
+        return context_str
+    
+    def _build_night_events_context(self, context: Dict[str, Any]) -> str:
+        """构建夜晚事件上下文"""
+        if "night_events" not in context:
+            return ""
+        
+        night_events = context["night_events"]
+        context_str = f"\n\n=== 🌙 昨夜事件 ==="
+        context_str += f"\n{night_events}"
+        
+        return context_str
+    
+    def _build_special_rules_context(self, context: Dict[str, Any]) -> str:
+        """构建特殊规则上下文"""
+        context_str = ""
+        
+        # 白天阶段的发言规则
+        if context.get("game_state", {}).get("phase") == "day":
+            context_str += f"\n\n=== 🔒 发言规则约束 ==="
+            context_str += f"\n⚠️ 严格规则："
+            context_str += f"\n1. 只能分析已经发言的玩家"
+            context_str += f"\n2. 不能提及未发言玩家的观点或行为"
+            context_str += f"\n3. 使用'根据前面发言'、'从已发言玩家来看'等限定词"
+            context_str += f"\n4. 避免绝对判断，使用'可能'、'倾向于'等表述"
+            context_str += f"\n5. 不能编造任何玩家间的私下互动或对话"
+        
+        # 投票阶段的特殊规则
+        if context.get("voting_phase"):
+            context_str += f"\n\n=== 🗳️ 投票阶段特殊规则 ==="
+            context_str += f"\n⚠️ 投票约束："
+            context_str += f"\n1. 必须基于已知事实进行投票决策"
+            context_str += f"\n2. 如果有预言家查杀信息，这是最高优先级依据"
+            context_str += f"\n3. 不能投票给已证明身份的真预言家"
+            context_str += f"\n4. 投票理由必须基于具体的游戏信息"
+        
+        return context_str
     
     def vote_for_player(self, candidates: List[int], reason: str = None, context: Dict[str, Any] = None) -> int:
         """Ask the LLM to vote for a player with strategic analysis"""
@@ -631,15 +904,22 @@ class LLMPlayer(Player):
         # Build strategic voting context
         strategic_context = self._build_voting_context()
         
-        # Add day speeches and last words to voting context
+        # 构建清晰的发言记录上下文
         day_speeches_context = ""
         if context and context.get("all_day_speeches"):
-            day_speeches_context = "\n\n=== 今日所有发言记录 ==="
-            for speech in context["all_day_speeches"]:
+            day_speeches_context = "\n\n=== 📝 今日完整发言记录（按发言顺序）==="
+            day_speeches_context += "\n⚠️ 重要：以下是所有玩家的真实发言，请严格基于这些内容进行分析"
+            
+            for i, speech in enumerate(context["all_day_speeches"], 1):
                 player_name = speech.get("name", f"玩家{speech.get('player', '?')}")
                 player_id = speech.get("player", "?")
                 speech_content = speech.get("speech", "")
-                day_speeches_context += f"\n• {player_name}({player_id}): {speech_content}"
+                speaking_order = speech.get("speaking_order", i)
+                
+                day_speeches_context += f"\n\n【第{speaking_order}位发言】{player_name}(编号{player_id})："
+                day_speeches_context += f"\n「{speech_content}」"
+            
+            day_speeches_context += "\n\n⚠️ 分析提醒：只能基于以上真实发言进行推理，不能编造任何不存在的内容"
         
         last_words_context = ""
         if context and context.get("last_words_for_voting"):
