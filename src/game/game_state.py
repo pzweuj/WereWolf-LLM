@@ -1,6 +1,7 @@
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from ..models.player import Player, Role, PlayerStatus, Team
+from ..utils.speech_history_tracker import SpeechHistoryTracker
 
 
 class VoteRecord:
@@ -35,7 +36,10 @@ class GameState:
         self.first_night_has_witness = True  # 首夜死亡有遗言
         self.max_rounds = 10  # 防止无限游戏
         
-        # Day context information
+        # Enhanced speech tracking system
+        self.speech_history_tracker = SpeechHistoryTracker()
+        
+        # Day context information (legacy - will be gradually replaced by speech_history_tracker)
         self.last_words_context: List[Dict[str, Any]] = []
         self.day_speeches: Dict[int, List[Dict[str, Any]]] = {}  # round -> [speech_records]
         self.last_words_printed: Dict[int, bool] = {}  # round -> printed_flag
@@ -526,6 +530,23 @@ class GameState:
         if not player:
             return False
         
+        # Record in enhanced speech history tracker
+        try:
+            success = self.speech_history_tracker.record_speech(
+                player_id=player_id,
+                player_name=player.name,
+                speech=speech,
+                round_num=self.current_round,
+                phase="day_discussion",
+                speaking_order=speaking_order
+            )
+            
+            if not success:
+                print(f"Warning: Failed to record speech in enhanced tracker for player {player_id}")
+        except Exception as e:
+            print(f"Error recording speech in enhanced tracker: {e}")
+        
+        # Also maintain legacy format for backward compatibility
         if self.current_round not in self.day_speeches:
             self.day_speeches[self.current_round] = []
         
@@ -540,6 +561,153 @@ class GameState:
         
         self.day_speeches[self.current_round].append(speech_record)
         return True
+    
+    def get_enhanced_speech_history(self, current_player_id: int) -> Dict[str, Any]:
+        """Get enhanced speech history using the SpeechHistoryTracker"""
+        try:
+            # Get all speeches for current round
+            current_round_speeches = self.speech_history_tracker.get_round_speeches(self.current_round, "day_discussion")
+            
+            # Get available references for the current player
+            available_refs = self.speech_history_tracker.get_available_references(
+                self.current_round, 
+                "day_discussion", 
+                exclude_player_id=current_player_id
+            )
+            
+            # Get all speeches from previous rounds
+            all_speeches = self.speech_history_tracker.get_all_speeches(limit=50)
+            
+            return {
+                "current_round_speeches": [
+                    {
+                        "player_id": speech.player_id,
+                        "player_name": speech.player_name,
+                        "content": speech.speech_content,
+                        "speaking_order": speech.speaking_order,
+                        "timestamp": speech.timestamp.isoformat()
+                    }
+                    for speech in current_round_speeches
+                ],
+                "available_references": [
+                    {
+                        "player_id": ref.player_id,
+                        "player_name": ref.player_name,
+                        "content": ref.speech_content[:100] + "..." if len(ref.speech_content) > 100 else ref.speech_content,
+                        "round": ref.round_number,
+                        "phase": ref.phase
+                    }
+                    for ref in available_refs
+                ],
+                "total_speeches": len(all_speeches),
+                "speech_count_by_player": {
+                    player.id: self.speech_history_tracker.get_speech_count(player.id)
+                    for player in self.players
+                }
+            }
+        except Exception as e:
+            print(f"Error getting enhanced speech history: {e}")
+            return {
+                "current_round_speeches": [],
+                "available_references": [],
+                "total_speeches": 0,
+                "speech_count_by_player": {}
+            }
+    
+    def verify_player_speech_reference(self, claimed_speech: str, claimed_speaker_id: int) -> Dict[str, Any]:
+        """Verify if a speech reference is valid using enhanced tracker"""
+        try:
+            is_valid = self.speech_history_tracker.verify_speech_reference(claimed_speech, claimed_speaker_id)
+            best_match, similarity = self.speech_history_tracker.find_best_speech_match(claimed_speech, claimed_speaker_id)
+            
+            return {
+                "is_valid": is_valid,
+                "best_match": {
+                    "content": best_match.speech_content if best_match else None,
+                    "similarity": similarity,
+                    "round": best_match.round_number if best_match else None,
+                    "phase": best_match.phase if best_match else None
+                } if best_match else None,
+                "verification_details": {
+                    "claimed_speech": claimed_speech,
+                    "claimed_speaker_id": claimed_speaker_id,
+                    "speaker_name": self.get_player_by_id(claimed_speaker_id).name if self.get_player_by_id(claimed_speaker_id) else "Unknown"
+                }
+            }
+        except Exception as e:
+            print(f"Error verifying speech reference: {e}")
+            return {
+                "is_valid": False,
+                "best_match": None,
+                "verification_details": {
+                    "error": str(e)
+                }
+            }
+    
+    def verify_identity_claim_reference(self, claimed_identity: str, claimed_speaker_id: int) -> Dict[str, Any]:
+        """Verify if an identity claim reference is valid"""
+        try:
+            is_valid = self.speech_history_tracker.verify_identity_claim_reference(claimed_identity, claimed_speaker_id)
+            all_claims = self.speech_history_tracker.get_player_identity_claims(claimed_speaker_id)
+            
+            return {
+                "is_valid": is_valid,
+                "claimed_identity": claimed_identity,
+                "speaker_id": claimed_speaker_id,
+                "speaker_name": self.get_player_by_id(claimed_speaker_id).name if self.get_player_by_id(claimed_speaker_id) else "Unknown",
+                "all_identity_claims": all_claims,
+                "has_made_identity_claims": len(all_claims) > 0
+            }
+        except Exception as e:
+            print(f"Error verifying identity claim reference: {e}")
+            return {
+                "is_valid": False,
+                "claimed_identity": claimed_identity,
+                "error": str(e)
+            }
+    
+    def get_speech_statistics(self) -> Dict[str, Any]:
+        """Get comprehensive speech statistics"""
+        try:
+            stats = {
+                "total_speeches": self.speech_history_tracker.get_speech_count(),
+                "speeches_by_player": {},
+                "speeches_by_round": {},
+                "identity_claims_summary": {}
+            }
+            
+            # Get statistics for each player
+            for player in self.players:
+                player_speech_count = self.speech_history_tracker.get_speech_count(player.id)
+                player_identity_claims = self.speech_history_tracker.get_player_identity_claims(player.id)
+                
+                stats["speeches_by_player"][player.id] = {
+                    "name": player.name,
+                    "speech_count": player_speech_count,
+                    "identity_claims": player_identity_claims
+                }
+                
+                if player_identity_claims:
+                    stats["identity_claims_summary"][player.id] = {
+                        "name": player.name,
+                        "claims": player_identity_claims
+                    }
+            
+            # Get statistics by round
+            for round_num in range(1, self.current_round + 1):
+                round_speeches = self.speech_history_tracker.get_round_speeches(round_num)
+                stats["speeches_by_round"][round_num] = len(round_speeches)
+            
+            return stats
+        except Exception as e:
+            print(f"Error getting speech statistics: {e}")
+            return {
+                "total_speeches": 0,
+                "speeches_by_player": {},
+                "speeches_by_round": {},
+                "identity_claims_summary": {},
+                "error": str(e)
+            }
     
     def _build_historical_context(self) -> Dict[str, Any]:
         """构建历史上下文信息"""

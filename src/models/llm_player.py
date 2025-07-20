@@ -4,6 +4,10 @@ import re
 from typing import Dict, List, Optional, Any
 from pydantic import Field
 from .player import Player, Role, PlayerStatus
+from ..utils.hallucination_detector import MultiLayerHallucinationDetector
+from ..utils.speech_corrector import IntelligentSpeechCorrector
+from ..utils.context_builder import EnhancedContextBuilder
+from .hallucination_models import HallucinationReductionConfig
 
 
 # 身份约束规则系统
@@ -373,9 +377,26 @@ class LLMPlayer(Player):
     speech_quality_log: List[Dict[str, Any]] = []
     hallucination_detection_log: List[Dict[str, Any]] = []
     correction_history: List[Dict[str, Any]] = []
+    hallucination_config: Optional[HallucinationReductionConfig] = Field(default=None)
+    hallucination_detector: Optional[Any] = Field(default=None)
+    speech_corrector: Optional[Any] = Field(default=None)
+    context_builder: Optional[Any] = Field(default=None)
     
     class Config:
         arbitrary_types_allowed = True
+    
+    def __init__(self, **data):
+        super().__init__(**data)
+        
+        # Initialize enhanced hallucination reduction components
+        if self.hallucination_config is None:
+            self.hallucination_config = HallucinationReductionConfig()
+        if self.hallucination_detector is None:
+            self.hallucination_detector = MultiLayerHallucinationDetector(self.hallucination_config)
+        if self.speech_corrector is None:
+            self.speech_corrector = IntelligentSpeechCorrector(self.hallucination_config)
+        if self.context_builder is None:
+            self.context_builder = EnhancedContextBuilder(self.hallucination_config)
         
     def send_message(self, prompt: str, context: Dict[str, Any] = None) -> str:
         """Send a message to the LLM and get response"""
@@ -564,13 +585,23 @@ class LLMPlayer(Player):
                 full_prompt += f"\n- 未发言玩家：{after_players or '无'}"
                 full_prompt += f"\n- 重要提醒：{speaking.get('strict_warning', '')}"
             
-            full_prompt += f"\n\n当前游戏状态："
+            full_prompt += f"\n\n🎯 当前游戏状态："
             if "game_state" in context:
                 game_state = context["game_state"]
-                full_prompt += f"\n- 当前轮次：第{game_state.get('round', 0)}轮"
-                full_prompt += f"\n- 当前阶段：{game_state.get('phase', '未知')}"
-                full_prompt += f"\n- 存活的玩家：{game_state.get('alive_players', [])}"
-                full_prompt += f"\n- 死亡的玩家：{game_state.get('dead_players', [])}"
+                current_round = game_state.get('round', 0)
+                current_phase = game_state.get('phase', '未知')
+                full_prompt += f"\n- 📅 当前轮次：第{current_round}轮"
+                full_prompt += f"\n- 🕐 当前阶段：{current_phase}"
+                full_prompt += f"\n- ✅ 存活的玩家：{game_state.get('alive_players', [])}"
+                full_prompt += f"\n- ❌ 死亡的玩家：{game_state.get('dead_players', [])}"
+                
+                # 添加轮次提醒
+                if current_round == 1:
+                    full_prompt += f"\n- ⚠️ 第一轮提醒：这是游戏开始，没有历史信息可参考"
+                elif current_round == 2:
+                    full_prompt += f"\n- ⚠️ 第二轮提醒：可以参考第一轮的发言和投票结果"
+                else:
+                    full_prompt += f"\n- ⚠️ 第{current_round}轮提醒：可以参考前{current_round-1}轮的所有信息"
             
             if "night_events" in context:
                 night_events = context["night_events"]
@@ -620,7 +651,43 @@ class LLMPlayer(Player):
                 last_words_context += f"\n📢 死亡玩家{player_name}({player_id})的完整遗言：\n   「{speech}」"
             last_words_context += "\n\n⚠️ 投票提醒：如果遗言中有预言家查杀信息，这是最可靠的投票依据！"
         
+        # 添加预言家保护检查 - 基于历史查杀记录
+        seer_protection_warning = ""
+        proven_seer_candidates = []
+        
+        if (self.team.value if hasattr(self.team, 'value') else self.team) == "villager":
+            # 检查候选人中是否有已证明身份的预言家
+            for candidate in safe_candidates:
+                # 检查是否有玩家声称是预言家且有成功查杀记录
+                if context and context.get("all_day_speeches"):
+                    for speech in context["all_day_speeches"]:
+                        if speech.get("player") == candidate:
+                            speech_content = speech.get("speech", "")
+                            # 检查是否声称预言家且有查杀信息
+                            if ("我是预言家" in speech_content or "预言家" in speech_content) and "查验" in speech_content:
+                                # 检查是否有成功的查杀记录（被查杀的玩家确实被投票淘汰）
+                                if context.get("dead_players"):
+                                    for dead_player in context["dead_players"]:
+                                        if "werewolf" in str(dead_player) and "查杀" in speech_content:
+                                            proven_seer_candidates.append(candidate)
+                                            break
+            
+            # 如果发现已证明身份的预言家在候选人中，发出警告
+            for proven_seer in proven_seer_candidates:
+                if proven_seer in safe_candidates:
+                    seer_protection_warning = f"""
+🚨🚨🚨 致命错误警告 🚨🚨🚨
+玩家{proven_seer}是已经通过成功查杀证明身份的真预言家！
+该玩家在前面轮次查杀的狼人已被证实并投票淘汰！
+作为好人阵营，投票给真预言家等于自杀！
+好人阵营失去预言家就等于失败！
+你必须立即从投票目标中排除玩家{proven_seer}！
+"""
+                    safe_candidates = [c for c in safe_candidates if c != proven_seer]
+
         prompt = f"""=== 投票阶段战略分析 ===
+
+{seer_protection_warning}
 
 {strategic_context}{day_speeches_context}{last_words_context}
 
@@ -630,15 +697,17 @@ class LLMPlayer(Player):
 作为{self.team.value if hasattr(self.team, 'value') else self.team}阵营，你需要基于以下原则投票：
 
 {"**狼人投票策略：**" if (self.team.value if hasattr(self.team, 'value') else self.team) == "werewolf" else "**好人投票策略：**"}
-{"- 避免投票给狼队友，优先投票给神职玩家" if (self.team.value if hasattr(self.team, 'value') else self.team) == "werewolf" else "- 优先相信预言家的查杀信息"}
-{"- 制造混乱，质疑预言家的可信度" if (self.team.value if hasattr(self.team, 'value') else self.team) == "werewolf" else "- 如果预言家报出查杀且无对跳，应该高度相信"}
-{"- 伪装成好人，表现出合理的推理逻辑" if (self.team.value if hasattr(self.team, 'value') else self.team) == "werewolf" else "- 分析发言逻辑，找出行为可疑的玩家"}
+{"- 避免投票给狼队友，优先投票给神职玩家" if (self.team.value if hasattr(self.team, 'value') else self.team) == "werewolf" else "- 🚨 绝对禁止投票淘汰已证明身份的真预言家！"}
+{"- 制造混乱，质疑预言家的可信度" if (self.team.value if hasattr(self.team, 'value') else self.team) == "werewolf" else "- 优先相信预言家的查杀信息，如果预言家报出查杀且无对跳，必须高度相信"}
+{"- 伪装成好人，表现出合理的推理逻辑" if (self.team.value if hasattr(self.team, 'value') else self.team) == "werewolf" else "- 预言家查杀的玩家是第一投票目标，其他分析都是次要的"}
 
 === 关键判断原则 ===
 1. **预言家查杀的可信度**：如果有预言家明确报出查杀，且无其他玩家对跳预言家，这个查杀信息极其可靠
-2. **发言逻辑分析**：观察玩家发言是否符合其声称的身份，是否有逻辑矛盾
-3. **行为动机分析**：好人发言是为了找狼，狼人发言是为了混淆视听
-4. **投票行为分析**：观察谁在为被查杀的玩家辩护，这些人可能是狼队友
+2. **预言家保护原则**：真预言家是好人阵营最重要的信息来源，绝对不能投票淘汰真预言家
+3. **对跳判断**：只有当出现多个预言家对跳时，才需要判断真假；单独跳预言家且有查杀的，应该高度相信
+4. **发言逻辑分析**：观察玩家发言是否符合其声称的身份，是否有逻辑矛盾
+5. **行为动机分析**：好人发言是为了找狼，狼人发言是为了混淆视听
+6. **投票行为分析**：观察谁在为被查杀的玩家辩护，这些人可能是狼队友
 
 请严格按照以下格式回复：
 VOTE: [玩家ID]
@@ -707,10 +776,13 @@ REASON: 预言家明确查杀了玩家3，且无其他玩家对跳预言家，�
         context_parts.append("- 考虑发言动机：好人找狼 vs 狼人混淆")
         
         if self.team == "villager":
-            context_parts.append("\n=== 好人阵营重要提醒 ===")
-            context_parts.append("- 如果预言家明确查杀且无对跳，这是最可靠的信息")
-            context_parts.append("- 优先投票给被查杀的玩家")
-            context_parts.append("- 警惕为被查杀玩家辩护的人，可能是狼队友")
+            context_parts.append("\n=== 好人阵营铁律 ===")
+            context_parts.append("- 🚨🚨🚨 绝对禁令：永远不能投票淘汰真预言家！这是好人阵营的死亡行为！")
+            context_parts.append("- 🔥 预言家查杀信息是最高优先级：如果预言家报查杀且无对跳，必须无条件相信")
+            context_parts.append("- ⚡ 投票优先级：被查杀的狼人 > 其他可疑玩家 > 绝不投预言家")
+            context_parts.append("- 🛡️ 预言家保护：预言家是好人阵营唯一的信息来源，失去预言家=失败")
+            context_parts.append("- ❌ 严禁行为：质疑已证明身份的预言家、投票给跳预言家的玩家")
+            context_parts.append("- ✅ 正确做法：跟随预言家指挥，投票给被查杀的狼人")
         else:
             context_parts.append("\n=== 狼人阵营高级策略 ===")
             context_parts.append("- **弃车保帅判断**：如果队友被预言家查杀且无法反驳，评估是否需要切割")
@@ -1147,10 +1219,30 @@ TARGET:
         return {"action": "none"}
     
     def speak(self, context: Dict[str, Any]) -> str:
-        """Generate speech for day discussion with reality constraint validation"""
+        """Generate speech for day discussion with enhanced hallucination detection and correction"""
         
-        # Initialize reality constraint validator
+        # Initialize legacy validator for backward compatibility
         validator = RealityConstraintValidator(self.game_state if hasattr(self, 'game_state') else None)
+        
+        # Build enhanced context using the new context builder
+        try:
+            if hasattr(self, 'context_builder') and hasattr(context, 'get') and 'game_state' in context:
+                # Get speech tracker from game state if available
+                game_state = context.get('game_state')
+                speech_tracker = getattr(game_state, 'speech_history_tracker', None)
+                
+                if speech_tracker:
+                    enhanced_context = self.context_builder.build_context(
+                        self.id, 
+                        context.get('phase', 'day'), 
+                        game_state,
+                        speech_tracker
+                    )
+                    # Merge enhanced context with original context
+                    context.update(enhanced_context)
+        except Exception as e:
+            print(f"Warning: Enhanced context building failed: {e}")
+            # Continue with original context
         
         # Get speaking order information from day context
         players_before = [p["name"] for p in context.get("players_before_me", [])]
@@ -1328,7 +1420,47 @@ SPEECH: 我是第{my_position}个发言，我是{self.name}，我的编号是{se
         except:
             initial_speech = response
         
-        # Validate speech content using reality constraint validator
+        # Enhanced hallucination detection using multi-layer system
+        try:
+            if hasattr(self, 'hallucination_detector') and hasattr(context, 'get') and 'game_state' in context:
+                game_state = context.get('game_state')
+                speech_tracker = getattr(game_state, 'speech_history_tracker', None)
+                
+                if speech_tracker:
+                    # Use enhanced multi-layer hallucination detection
+                    hallucination_result = self.hallucination_detector.detect_all_hallucinations(
+                        initial_speech, self, context, speech_tracker
+                    )
+                    
+                    print(f"🔍 Enhanced Detection - {self.name}({self.id}): {hallucination_result.hallucination_count} hallucinations detected")
+                    
+                    if not hallucination_result.is_valid and hallucination_result.correction_needed:
+                        print(f"🚨 Enhanced hallucination detection - {self.name}({self.id}): {len(hallucination_result.hallucinations)} issues")
+                        
+                        # Use enhanced speech corrector
+                        correction_result = self.speech_corrector.correct_speech(
+                            initial_speech, hallucination_result.hallucinations, context, self
+                        )
+                        
+                        if correction_result.success:
+                            print(f"✅ Enhanced correction applied - {self.name}({self.id})")
+                            print(f"   Quality score: {correction_result.quality_score:.2f}")
+                            print(f"   Corrections: {len(correction_result.corrections_applied)}")
+                            
+                            # Log enhanced detection and correction
+                            self._log_enhanced_hallucination_detection(initial_speech, hallucination_result, correction_result, context)
+                            
+                            return correction_result.corrected_speech
+                        else:
+                            print(f"⚠️ Enhanced correction failed - {self.name}({self.id}), falling back to legacy system")
+                    else:
+                        # Log successful validation
+                        self._log_enhanced_speech_quality(initial_speech, hallucination_result, context)
+                        return initial_speech
+        except Exception as e:
+            print(f"Warning: Enhanced hallucination detection failed: {e}, falling back to legacy system")
+        
+        # Fallback to legacy validation system
         validation_result = validator.validate_speech_content(
             self.id, 
             self.role, 
@@ -1341,14 +1473,14 @@ SPEECH: 我是第{my_position}个发言，我是{self.name}，我的编号是{se
         self._log_speech_quality(initial_speech, validation_result, quality_score, context)
         
         if not validation_result["is_valid"]:
-            print(f"🚨 检测到幻觉内容 - {self.name}({self.id}): {validation_result['issues']}")
+            print(f"🚨 Legacy detection - {self.name}({self.id}): {validation_result['issues']}")
             
             # Log hallucination detection
             self._log_hallucination_detection(initial_speech, validation_result, context)
             
             # Use corrected speech
             corrected_speech = validation_result["corrected_speech"]
-            print(f"✅ 修正后发言 - {self.name}({self.id}): {corrected_speech}")
+            print(f"✅ Legacy correction - {self.name}({self.id}): {corrected_speech}")
             
             # Log correction history
             self._log_correction_history(initial_speech, corrected_speech, validation_result["issues"], context)
@@ -1356,6 +1488,55 @@ SPEECH: 我是第{my_position}个发言，我是{self.name}，我的编号是{se
             return corrected_speech
         
         return initial_speech
+    
+    def _log_enhanced_hallucination_detection(
+        self, 
+        original_speech: str, 
+        hallucination_result: Any, 
+        correction_result: Any, 
+        context: Dict[str, Any] = None
+    ):
+        """Log enhanced hallucination detection results"""
+        enhanced_log = {
+            "timestamp": "current",
+            "round": context.get("round", 1) if context else 1,
+            "player_id": self.id,
+            "player_name": self.name,
+            "original_speech": original_speech,
+            "hallucination_count": hallucination_result.hallucination_count,
+            "confidence_score": hallucination_result.confidence_score,
+            "correction_needed": hallucination_result.correction_needed,
+            "correction_success": correction_result.success,
+            "correction_quality": correction_result.quality_score,
+            "corrections_applied": len(correction_result.corrections_applied),
+            "hallucination_types": [h.type.value for h in hallucination_result.hallucinations],
+            "correction_types": [c.type.value for c in correction_result.corrections_applied],
+            "system_version": "enhanced"
+        }
+        
+        self.hallucination_detection_log.append(enhanced_log)
+    
+    def _log_enhanced_speech_quality(
+        self, 
+        speech: str, 
+        hallucination_result: Any, 
+        context: Dict[str, Any] = None
+    ):
+        """Log enhanced speech quality for valid speeches"""
+        quality_log = {
+            "timestamp": "current",
+            "round": context.get("round", 1) if context else 1,
+            "player_id": self.id,
+            "player_name": self.name,
+            "speech": speech,
+            "quality_score": hallucination_result.confidence_score,
+            "is_valid": hallucination_result.is_valid,
+            "issues_count": hallucination_result.hallucination_count,
+            "speech_length": len(speech),
+            "system_version": "enhanced"
+        }
+        
+        self.speech_quality_log.append(quality_log)
     
     def _evaluate_speech_quality(self, speech: str, validation_result: Dict[str, Any], context: Dict[str, Any] = None) -> float:
         """评估发言质量，返回0-1之间的分数"""

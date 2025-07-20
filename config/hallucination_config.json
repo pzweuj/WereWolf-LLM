@@ -1,0 +1,34 @@
+{
+  "detection_strictness": 0.8,
+  "enable_multi_layer_detection": true,
+  "max_detection_time": 5.0,
+  "enable_auto_correction": true,
+  "max_correction_attempts": 3,
+  "correction_quality_threshold": 0.7,
+  "max_speech_history_length": 100,
+  "enable_reality_anchors": true,
+  "context_validation_enabled": true,
+  "enable_enhanced_context": true,
+  "enable_detailed_logging": true,
+  "report_generation_enabled": true,
+  "export_format": ["json", "html", "csv"],
+  "performance_monitoring": {
+    "enabled": true,
+    "metrics_collection_interval": 60,
+    "memory_threshold_mb": 512,
+    "response_time_threshold_ms": 5000
+  },
+  "advanced_reporting": {
+    "enabled": true,
+    "generate_html_reports": true,
+    "generate_csv_exports": true,
+    "include_performance_metrics": true,
+    "report_retention_days": 30
+  },
+  "batch_processing": {
+    "enabled": false,
+    "batch_size": 10,
+    "max_concurrent_batches": 3,
+    "batch_timeout_seconds": 300
+  }
+}
