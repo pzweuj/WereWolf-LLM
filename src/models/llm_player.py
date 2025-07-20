@@ -651,39 +651,90 @@ class LLMPlayer(Player):
                 last_words_context += f"\n📢 死亡玩家{player_name}({player_id})的完整遗言：\n   「{speech}」"
             last_words_context += "\n\n⚠️ 投票提醒：如果遗言中有预言家查杀信息，这是最可靠的投票依据！"
         
-        # 添加预言家保护检查 - 基于历史查杀记录
+        # 强化预言家保护机制 - 基于游戏历史和查杀记录
         seer_protection_warning = ""
         proven_seer_candidates = []
         
         if (self.team.value if hasattr(self.team, 'value') else self.team) == "villager":
-            # 检查候选人中是否有已证明身份的预言家
+            # 方法1: 检查proven_seer_info（最直接的方法）
+            proven_seer_info = context.get("proven_seer_info", {})
+            for seer_id, seer_info in proven_seer_info.items():
+                if seer_id in safe_candidates and seer_info.get("is_proven", False):
+                    proven_seer_candidates.append(seer_id)
+            
+            # 方法2: 检查游戏历史中的预言家身份验证
+            game_history = context.get("game_history", {})
+            seer_claims = game_history.get("seer_claims", {})
+            
             for candidate in safe_candidates:
-                # 检查是否有玩家声称是预言家且有成功查杀记录
-                if context and context.get("all_day_speeches"):
-                    for speech in context["all_day_speeches"]:
+                if candidate in seer_claims:
+                    verified_kills = seer_claims[candidate].get("verified_kills", [])
+                    if verified_kills:  # 有成功验证的查杀
+                        proven_seer_candidates.append(candidate)
+            
+            # 方法3: 基于发言内容检查（备用方法）
+            if not proven_seer_candidates and context.get("all_day_speeches"):
+                for candidate in safe_candidates:
+                    # 检查该候选人的历史发言
+                    all_speeches = context.get("all_day_speeches", [])
+                    
+                    # 检查所有轮次的发言记录
+                    for speech in all_speeches:
                         if speech.get("player") == candidate:
                             speech_content = speech.get("speech", "")
-                            # 检查是否声称预言家且有查杀信息
-                            if ("我是预言家" in speech_content or "预言家" in speech_content) and "查验" in speech_content:
-                                # 检查是否有成功的查杀记录（被查杀的玩家确实被投票淘汰）
-                                if context.get("dead_players"):
-                                    for dead_player in context["dead_players"]:
-                                        if "werewolf" in str(dead_player) and "查杀" in speech_content:
-                                            proven_seer_candidates.append(candidate)
-                                            break
+                            # 检查预言家声明和查杀信息
+                            if ("我是预言家" in speech_content and "查验" in speech_content and 
+                                ("狼人" in speech_content or "查杀" in speech_content)):
+                                
+                                # 检查被查杀的玩家是否确实死亡且是狼人
+                                import re
+                                # 更精确的正则匹配
+                                kill_patterns = [
+                                    r'查验.*?(\d+).*?狼人',
+                                    r'(\d+).*?是狼人',
+                                    r'查杀.*?(\d+)',
+                                    r'(\d+)号.*?狼人'
+                                ]
+                                
+                                for pattern in kill_patterns:
+                                    matches = re.findall(pattern, speech_content)
+                                    for match in matches:
+                                        try:
+                                            target_id = int(match)
+                                            # 检查这个目标是否确实死亡且是狼人
+                                            if context.get("dead_players"):
+                                                for dead_info in context["dead_players"]:
+                                                    dead_str = str(dead_info)
+                                                    if (str(target_id) in dead_str and "werewolf" in dead_str):
+                                                        proven_seer_candidates.append(candidate)
+                                                        break
+                                        except ValueError:
+                                            continue
             
-            # 如果发现已证明身份的预言家在候选人中，发出警告
-            for proven_seer in proven_seer_candidates:
+            # 如果发现已证明身份的预言家在候选人中，强制保护
+            for proven_seer in set(proven_seer_candidates):  # 去重
                 if proven_seer in safe_candidates:
                     seer_protection_warning = f"""
-🚨🚨🚨 致命错误警告 🚨🚨🚨
+🚨🚨🚨 系统强制保护警告 🚨🚨🚨
 玩家{proven_seer}是已经通过成功查杀证明身份的真预言家！
-该玩家在前面轮次查杀的狼人已被证实并投票淘汰！
-作为好人阵营，投票给真预言家等于自杀！
-好人阵营失去预言家就等于失败！
-你必须立即从投票目标中排除玩家{proven_seer}！
+
+证据分析：
+- 该玩家在游戏中声称预言家身份
+- 该玩家查杀的狼人已被证实并投票淘汰
+- 这100%证明了该玩家的预言家身份真实性
+
+⚠️ 关键提醒：
+作为好人阵营，你绝对不能投票给真预言家！
+投票给真预言家 = 好人阵营失败！
+真预言家是好人阵营唯一的信息来源！
+
+🔒 系统已自动从候选人中移除该玩家！
+请从剩余候选人中选择投票目标！
+
+当前可选目标：{[c for c in safe_candidates if c != proven_seer]}
 """
                     safe_candidates = [c for c in safe_candidates if c != proven_seer]
+                    break  # 只需要一个警告
 
         prompt = f"""=== 投票阶段战略分析 ===
 

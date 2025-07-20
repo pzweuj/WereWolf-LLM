@@ -276,6 +276,10 @@ class DayPhase:
                 if hasattr(self.game_state, 'last_words_context') and self.game_state.last_words_context:
                     context["last_words_for_voting"] = self.game_state.last_words_context
                 
+                # Add proven seer protection information
+                context["proven_seer_info"] = self._get_proven_seer_info()
+                context["game_history"] = self._build_game_history_context()
+                
                 voted_player = voter.vote_for_player(candidate_ids, context=context)
                 
                 if voted_player in candidate_ids:
@@ -423,3 +427,68 @@ class DayPhase:
             summary_parts.append(f"{i}. {player_name}({player_id}) - {death_reason}：{speech}")
         
         return "\n".join(summary_parts)
+    
+    def _get_proven_seer_info(self) -> Dict[str, Any]:
+        """Get information about proven seers based on successful kills"""
+        proven_seers = {}
+        
+        # Check all players who claimed to be seer
+        players = self.game_state.players.values() if hasattr(self.game_state.players, 'values') else self.game_state.players
+        for player in players:
+            if hasattr(player, 'seer_checks') and player.seer_checks:
+                # Check if any of their checks resulted in successful eliminations
+                successful_checks = []
+                for target_id, result in player.seer_checks.items():
+                    target_player = self.game_state.get_player_by_id(target_id)
+                    if (target_player and not target_player.is_alive() and 
+                        result == "狼人" and target_player.role.value == "werewolf"):
+                        successful_checks.append({
+                            "target": target_id,
+                            "result": result,
+                            "verified": True
+                        })
+                
+                if successful_checks:
+                    proven_seers[player.id] = {
+                        "player_id": player.id,
+                        "player_name": player.name,
+                        "successful_checks": successful_checks,
+                        "is_proven": True
+                    }
+        
+        return proven_seers
+    
+    def _build_game_history_context(self) -> Dict[str, Any]:
+        """Build game history context for voting decisions"""
+        history = {
+            "rounds_played": self.game_state.current_round,
+            "seer_claims": {},
+            "successful_eliminations": [],
+            "night_kills": []
+        }
+        
+        # Track seer claims and their results
+        players = self.game_state.players.values() if hasattr(self.game_state.players, 'values') else self.game_state.players
+        for player in players:
+            if hasattr(player, 'seer_checks') and player.seer_checks:
+                history["seer_claims"][player.id] = {
+                    "player_name": player.name,
+                    "claimed_kills": [],
+                    "verified_kills": []
+                }
+                
+                for target_id, result in player.seer_checks.items():
+                    claim_info = {
+                        "target": target_id,
+                        "result": result,
+                        "round": self.game_state.current_round  # Approximate
+                    }
+                    history["seer_claims"][player.id]["claimed_kills"].append(claim_info)
+                    
+                    # Check if this was verified by elimination
+                    target_player = self.game_state.get_player_by_id(target_id)
+                    if (target_player and not target_player.is_alive() and 
+                        result == "狼人" and target_player.role.value == "werewolf"):
+                        history["seer_claims"][player.id]["verified_kills"].append(claim_info)
+        
+        return history
